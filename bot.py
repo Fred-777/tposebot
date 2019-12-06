@@ -21,7 +21,6 @@ dotenv.load_dotenv(env_path)
 
 prefix = os.getenv("prefix")
 token = os.getenv("token")
-bot_id = int(os.getenv("bot_id"))
 
 # ---------- Class helpers ---------- #
 
@@ -544,6 +543,7 @@ commands_map = {
     f"{prefix}tpose": tpose
 }
 
+bot_id = 647954736959717416
 client = discord.Client()
 
 # ---------- Event listeners ---------- #

@@ -1,4 +1,4 @@
-# discordbot
+# tposebot
 That's a meme discord bot I did for a small group of friends: TPoseBot.
 Motivation to do this project came from discord situations where one person
 wanted to mute the other for x time, but always forgot to unmute back

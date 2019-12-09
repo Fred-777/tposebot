@@ -14,13 +14,28 @@ with open("C:/Users/Usuario/Downloads/discord-bot/bot.py") as file:
 """
 
 # Load environment
-env_path = "C:/Users/Usuario/Downloads/discord-bot/.env"
+base_path = "C:/Users/Usuario/Downloads/discord-bot"
+os.chdir(base_path)
+
+env_path = "./.env"
+bad_words_path = "./bad-words.txt"
+extra_srcs_path = "./extra-srcs.txt"
+
 dotenv.load_dotenv(env_path)
 
 # ---------- Environment variables ---------- #
 
 prefix = os.getenv("prefix")
 token = os.getenv("token")
+sc_param = os.getenv("sc_param")
+
+with open(bad_words_path) as file:
+    data = file.read()
+bad_words = json.loads(data)
+
+with open(extra_srcs_path) as file:
+    data = file.read()
+extra_srcs = json.loads(data)
 
 # ---------- Class helpers ---------- #
 
@@ -53,7 +68,7 @@ class Command:
         return f"{self.name}"
 
 class BaseEvent:
-    """ 
+    """
     Base class for event monitoring.
     Events structure: dict with guild.id key for each guild the bot is in,
     which each leads to a dict with member.id key for each member in that guild,
@@ -142,6 +157,13 @@ def extract_id(s):
     """ Extract id from given string. """
     return int(re.search("\d+", s)[0])
 
+def find_member(message, member_id):
+    """ Find member in a given guild and return it, otherwise return None. """
+    members = [member for member in message.guild.members]
+    member = next((member for member in members if member.id == member_id), None)
+
+    return member
+
 def get_random_pediu():
     """ Get string "pediu" with randomized changes. """
     s = "pediu"
@@ -162,7 +184,7 @@ def request_images(query_param, max_page=1):
         "User-Agent": "Chrome"
     }
 
-    sc_param = "qf-DXuEaaiozRPb6QfKmikc09MxD9e844AiQ5jU-hXvRzfp6h-X8HwPaNABzBYC5N5IFg0kA9LdCG19Lz1s48kdw3VrlTSiLxyOf_JxyotjDoeO6O2et33UaLXwbd6xmjiUpVL5vrsFPJjDSMUuSju3J4dkCbIVKpyysWXTArbm1J3tqNx1NIJx5y31CXkbJUncvadNNjxxoTaa2wfFyiXCkjBk9fu4yEV9uPjAJOIOyRyDJjJ2GQCYJGkD3YOc75TvjR_BzDFcxbhAGZHgMN70Mxy1rmtISH7mUpWVoPVmcR3rAs9Z0_8pnLoDjFy4USYazFuCGfvGdSTdEtwc-yNlmnRnZU1kDqtRXZaRytsWaOlTAuJtGO6KuA2iZT_eO1-7JiJQP89QDP5aNaBjWiPIpx5r5efEafblGkOZsDdf428n9tbkHmi0lpvmOx1ONE9ndc8sjYKrbRXJa4Kun0caH6XmopvmXi61Dcy-Ia3sNglVz6AmK1ijGtta1zi5YoimxW2OMDm6yrFv2isGFwYCQN_CIGRckbapmwGPIB8r9hybmyH2stzEoaGL4bkcEXgZ8jnNvyxB-aufdQ2JfwiJAWxLYNAgIg2RD-RlIuEV6Pbv02qwW66gKw0qYYxFelwh6JRPdb8TvUvyIxQatH5UrZBxN9nnC497IflzwUvQP2qRDo3xB1rA3RXNgROPo90Y5g0pfI_obMD6W8kZphR9K1Zn_Y34zP0b675J_HcGGYZodLnKtNvF3iqjeZ6-mc2cd5X4I3sD7gmrFozSEGC_x45gT5CedL0ddaIBSDYjm3PE1KQscEdKW1UmJWE_bazAotLdsEMwI6TiMVABFkJ7esNQApRSufUkuPqGbkTC857KuXAnII-XCW8StfTblW8Zk6Op0qOdwNatfOqxERRBAXcjHsbBxNhoBbANV7gaO1JfVC2_DzZgWZwoX9f3iIifoiEj2278sHWwO9XZ2Hb_eTP8jmWRXrItheWgJqQThR341lSb05EAvWIKnwGYLy-Bk1ptPcdASms_y-cL53sbOesQYIrM8TBihp9E-wrZ0a4L0ulU9qifWULWOPIOnO06fcqKsA3Vfr_kyPtJJG2SxGQ5qwuhQW9BX6__K9f2mzGx6zKvqOhBMD2GhkHHruKTbcvcikpGfixfE2vwgSPrpnnDvnSR66VAUbytFcvHqPDnyLb3mathdCDqvcjzHcgLopdQXRPJjJzO9BWlAqFyRav2uauF-XzoWAFFROc9hOgshbzTXe4eulrRQ-nm8Uuim6-rIkkEQrlfvhv6uRymj3Dtx7MlFE6kHsGOyheXqfuFsbMoviGv4IiljafVZdyGuPdOdj-A5FNLht-JCF_aOuHhcXnDnoY4qzuDzxBHJZyxqKrrENx3CALTDP8H_VsKd34u8l6k40u3iKzfO9O0jSjv4z-qksXTMzbjgXWoEnpPvsegvHMHNkhMpVuki2T0VTDECxprw6K3ME_5K8UNXjNQ2xIpvtpGFUoCANpvORXhl-cp22rRdMF4f4fFnXn-Pegkf75lFH1XenFnb_zpgzMfge8tZx5p5nQeYuaB92BdzZy8wYTETS83GkUtpPUFLNk8ilnt2_9EOE8Ulp691AgX8ntsAHcVie0e6J_kNO-_2IHB0bidSsN7JteNIcHVJE9bc-sM4ugGxxz1b-datpgS_OGEzGNTa_qZZh-XufjtTxZfGpTKehky1GxN3Da8fJwmhBhSY9qzeSZo5xQFxo_D6JKkwP7Ko6jkB0aaZJL-I-8c0_gah-Y0F"
+    global sc_param
     urls = [f"{base_url}/serp?qc=images&q={query_param}&page={page}&sc={sc_param}"
             for page in range(1, max_page + 1)]
 
@@ -182,11 +204,22 @@ def request_tpose_srcs(max_page=1):
     """ Request tpose image srcs. """
     srcs = request_images("tpose", max_page)
 
-    extra_srcs = ["https://cdn.discordapp.com/attachments/596741048525389844/651112131592192098/emeraldo.png"]
+    global extra_srcs
     for src in extra_srcs:
         srcs.append(src)
 
     return srcs
+
+def validate_permission(message, function_role):
+    """ Verify if user has permission for a given action. """
+    author = message.author
+    roles = author.roles
+    role_has_permission = any([function_role(role) for role in roles])
+    is_admin = any([role.permissions.administrator for role in roles])
+    is_owner = author.id == message.guild.owner_id
+    has_permission = role_has_permission or is_admin or is_owner
+
+    return has_permission
 
 async def process_message(message):
     """ Handle message reply. """
@@ -201,8 +234,8 @@ async def process_message(message):
         if message.content.lower().startswith("quem"):
             return get_random_pediu()
 
-        # Verify if message was sent by bot
-        bot_was_highlighted = re.search(f"<@\!?{bot_id}>", message.content) != None
+        # Verify if message is just bot highlight
+        bot_was_highlighted = re.search(f"^<@\!?{bot_id}>$", message.content) != None
 
         # Handle input
         parameters = re.findall("\S+", message.content)
@@ -228,12 +261,11 @@ async def process_message(message):
 # ---------- Commands ---------- #
 
 def suggest_help():
-    """ Simple introduction to be performed when bot is mentioned. """
+    """ Simple introduction to be performed when bot is highlighted. """
     return f"Type {prefix}help for more info"
 
 def get_help(parameters):
-    """ Provide brief description of all commands or
-        extended description for a given command. """
+    """ Describe all commands briefly or a given command extensively. """
     length = len(parameters)
     if length > 2:
         return "Error: Too many parameters"
@@ -271,23 +303,14 @@ async def mute(message, parameters):
     seconds_str = parameters[2]
 
     # Validate author permissions
-    author = message.author
-    roles = author.roles
-    role_can_mute = any([role.permissions.mute_members for role in roles])
-    is_admin = any([role.permissions.administrator for role in roles])
-    is_owner = author.id == message.guild.owner_id
-    can_mute = role_can_mute or is_admin or is_owner
+    can_mute = validate_permission(message, lambda role: role.permissions.mute_members)
 
     if not can_mute:
         return f"Error: User '{author.name}' doesn't have permission to mute"
 
     # Validate member
-    members = [member for member in message.guild.members]
-    try:
-        member = [member for member in members if member.id == member_id][0]
-        is_member_valid = True
-    except IndexError:
-        is_member_valid = False
+    member = find_member(message, member_id)
+    is_member_valid = member != None
 
     if not is_member_valid:
         return f"Error: User '{member_name}' not found on this server"
@@ -337,12 +360,8 @@ async def unmute(message, parameters):
     member_id = extract_id(member_name)
 
     # Validate member
-    members = [member for member in message.guild.members]
-    try:
-        member = [member for member in members if member.id == member_id][0]
-        is_member_valid = True
-    except IndexError:
-        is_member_valid = False
+    member = find_member(message, member_id)
+    is_member_valid = member != None
 
     if not is_member_valid:
         return f"Error: User '{member_name}' not found on this server"
@@ -384,23 +403,14 @@ async def deaf(message, parameters):
     seconds_str = parameters[2]
 
     # Validate author permissions
-    author = message.author
-    roles = author.roles
-    role_can_deaf = any([role.permissions.deafen_members for role in roles])
-    is_admin = any([role.permissions.administrator for role in roles])
-    is_owner = author.id == message.guild.owner_id
-    can_deaf = role_can_deaf or is_admin or is_owner
+    can_deaf = validate_permission(message, lambda role: role.permissions.deafen_members)
 
     if not can_deaf:
         return f"Error: User '{author.name}' doesn't have permission to deafen"
 
     # Validate member
-    members = [member for member in message.guild.members]
-    try:
-        member = [member for member in members if member.id == member_id][0]
-        is_member_valid = True
-    except IndexError:
-        is_member_valid = False
+    member = find_member(message, member_id)
+    is_member_valid = member != None
 
     if not is_member_valid:
         return f"Error: User '{member_name}' not found on this server"
@@ -450,12 +460,8 @@ async def undeaf(message, parameters):
     member_id = extract_id(member_name)
 
     # Validate member
-    members = [member for member in message.guild.members]
-    try:
-        member = [member for member in members if member.id == member_id][0]
-        is_member_valid = True
-    except IndexError:
-        is_member_valid = False
+    member = find_member(message, member_id)
+    is_member_valid = member != None
 
     if not is_member_valid:
         return f"Error: User '{member_name}' not found on this server"
@@ -499,7 +505,7 @@ async def tpose(message, parameters):
 loop = asyncio.get_event_loop()
 
 # Tpose image srcs
-srcs = request_tpose_srcs(max_page=5)
+srcs = request_tpose_srcs(max_page=4)
 
 # Map string to object
 commands = {

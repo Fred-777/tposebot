@@ -31,7 +31,7 @@ sc_param = os.getenv("sc_param")
 
 with open(bad_words_path) as file:
     data = file.read()
-bad_words = json.loads(data)
+bad_word_regexes = json.loads(data)
 
 with open(extra_srcs_path) as file:
     data = file.read()
@@ -65,14 +65,27 @@ class Command:
                 f"Example: {self.example}")
 
     def __repr__(self):
-        return f"{self.name}"
+        return self.name
 
-class BaseEvent:
+class Restriction:
+    """ Restriction filled with data to be used as restrict argument. """
+    def __init__(self, name_present, name_past, function_role, restrict_event_class, kwarg):
+        self.name_present = name_present
+        self.name_past = name_past
+        self.function_role = function_role
+        self.restrict_event_class = restrict_event_class
+        self.kwarg_enable = {kwarg: True}
+        self.kwarg_disable = {kwarg: False}
+
+    def __repr__(self):
+        return self.name_present
+
+class RestrictEvent:
     """
     Base class for event monitoring.
     Events structure: dict with guild.id key for each guild the bot is in,
     which each leads to a dict with member.id key for each member in that guild,
-    which each leads to a BaseEvent object.
+    which each leads to a RestrictEvent object.
     """
     raw_guilds = get_raw_guilds()
     guild_ids = [int(raw_guild["id"]) for raw_guild in raw_guilds]
@@ -128,41 +141,42 @@ class BaseEvent:
         """ Get formatted list of running mute events in a guild. """
         events = sorted(cls.get_events(guild_id), key=lambda event: event.member.name)
         if len(events) == 0:
-            return "There are no muted users"
+            return "List is empty"
         
         formatted_events = [f"{event.member.name}: {event.get_remaining_seconds()} seconds" 
                             for event in events]
 
         return "\n".join(formatted_events)
 
-class MuteEvent(BaseEvent):
+class MuteEvent(RestrictEvent):
     """ Mute event on progress. """
-    events = BaseEvent.events.copy()
+    events = RestrictEvent.events.copy()
 
     def __init__(self, guild, member, seconds):
         super().__init__(member, seconds)
         MuteEvent.add_event(guild.id, self)
 
-class DeafEvent(BaseEvent):
+class DeafEvent(RestrictEvent):
     """ Deaf event on progress. """
-    events = BaseEvent.events.copy()
+    events = RestrictEvent.events.copy()
 
     def __init__(self, guild, member, seconds):
         super().__init__(member, seconds)
         DeafEvent.add_event(guild.id, self)
+
+class AmputateEvent(RestrictEvent):
+    """ Deaf event on progress. """
+    events = RestrictEvent.events.copy()
+
+    def __init__(self, guild, member, seconds):
+        super().__init__(member, seconds)
+        AmputateEvent.add_event(guild.id, self)
 
 # ---------- Internal functions ---------- #
 
 def extract_id(s):
     """ Extract id from given string. """
     return int(re.search("\d+", s)[0])
-
-def find_member(message, member_id):
-    """ Find member in a given guild and return it, otherwise return None. """
-    members = [member for member in message.guild.members]
-    member = next((member for member in members if member.id == member_id), None)
-
-    return member
 
 def get_random_pediu():
     """ Get string "pediu" with randomized changes. """
@@ -184,11 +198,10 @@ def request_images(query_param, max_page=1):
         "User-Agent": "Chrome"
     }
 
-    global sc_param
     urls = [f"{base_url}/serp?qc=images&q={query_param}&page={page}&sc={sc_param}"
             for page in range(1, max_page + 1)]
 
-    srcs = []
+    srcs = []   
     for url in urls:
         response = requests.get(url, headers=headers)
         soup = bs4.BeautifulSoup(response.content, features="lxml")
@@ -204,14 +217,44 @@ def request_tpose_srcs(max_page=1):
     """ Request tpose image srcs. """
     srcs = request_images("tpose", max_page)
 
-    global extra_srcs
     for src in extra_srcs:
         srcs.append(src)
 
     return srcs
 
-def validate_permission(message, function_role):
-    """ Verify if user has permission for a given action. """
+def replace_bad_words(s):
+    """ Replace bad words in a message. """
+    words = re.findall("\S+", s) or []
+
+    bad_words = {word for word in words 
+                 if any(word.search(bad_word_regex, word.lower()) != None) 
+                 for bad_word_regex in bad_word_regexes}
+    
+    for bad_word in bad_words:
+        s = re.sub(bad_word, "#" * len(bad_word), s)
+
+    return s
+
+async def restrict(message, parameters, restriction):
+    """ Restrict someone for given number of seconds. """
+    length = len(parameters)
+    required_length = 3
+
+    # Validate length
+    if length == 1:
+        return "Error: No 'member' parameter was given"
+    if length == 2:
+        return "Error: No 'seconds' parameter was given"
+    if length > required_length:
+        return "Error: Too many parameters"
+    
+    member_name = parameters[1]
+    member_id = extract_id(member_name)
+    seconds_str = parameters[2]
+
+    # Validate author permissions
+    function_role = restriction.function_role
+
     author = message.author
     roles = author.roles
     role_has_permission = any([function_role(role) for role in roles])
@@ -219,7 +262,113 @@ def validate_permission(message, function_role):
     is_owner = author.id == message.guild.owner_id
     has_permission = role_has_permission or is_admin or is_owner
 
-    return has_permission
+    if not has_permission:
+        return f"Error: User '{author.name}' doesn't have permission to {restriction.name_present}"
+
+    # Validate member
+    members = [member for member in message.guild.members]
+    member = next((member for member in members if member.id == member_id), None)
+    is_member_valid = member != None
+
+    if not is_member_valid:
+        return f"Error: User '{member_name}' not found on this server"
+
+    # Validate seconds
+    try:
+        is_seconds_number = re.search("\D", seconds_str) == None
+        seconds = int(seconds_str)
+        is_seconds_on_bounds = seconds > 0 and seconds <= 3600
+        is_seconds_valid = is_seconds_number and is_seconds_on_bounds
+    except ValueError:
+        is_seconds_valid = False
+
+    if not is_seconds_valid:
+        return ("Error: Invalid amount of seconds, " + 
+               "it has to be an integer between 1 and 3600")
+
+    # Restrict and sleep
+    try:
+        kwarg = restriction.kwarg_enable
+        await member.edit(**kwarg)
+    except discord.errors.HTTPException as e:
+        voice_restrictions = {"deaf", "mute"}
+        if restriction.name_present in voice_restrictions:
+            return "Error: User is not in voice chat"
+        else:
+            return "Error: User is not in text chat"
+
+    restrict_event_class = restriction.restrict_event_class
+
+    mute_event = restrict_event_class(message.guild, member, seconds)
+    reply = f"User {member.name} is {restriction.name_past} for {seconds} seconds"
+    await message.channel.send(reply)
+    await asyncio.sleep(seconds)
+    
+    # Unrestrict if still restricted
+    guild_id = message.guild.id
+    is_restricted = restrict_event_class.verify_guild_member(guild_id, member.id)
+    if is_restricted:
+        kwarg = restriction.kwarg_disable
+        await member.edit(**kwarg)
+
+async def unrestrict(message, parameters, restriction):
+    """ Unrestrict a restricted member. """
+    length = len(parameters)
+    required_length = 2
+
+    # Validate length
+    if length == 1:
+        return "Error: No 'member' parameter was given"
+    if length > required_length:
+        return "Error: Too many parameters"
+
+    member_name = parameters[1]
+    member_id = extract_id(member_name)
+
+    # Validate author permissions
+    function_role = restriction.function_role
+
+    author = message.author
+    roles = author.roles
+    role_has_permission = any([function_role(role) for role in roles])
+    is_admin = any([role.permissions.administrator for role in roles])
+    is_owner = author.id == message.guild.owner_id
+    has_permission = role_has_permission or is_admin or is_owner
+
+    if not has_permission:
+        return f"Error: User '{author.name}' doesn't have permission to un{restriction.name_present}"
+
+    # Validate member
+    members = [member for member in message.guild.members]
+    member = next((member for member in members if member.id == member_id), None)
+    is_member_valid = member != None
+
+    if not is_member_valid:
+        return f"Error: User '{member_name}' not found on this server"
+
+    restrict_event_class = restriction.restrict_event_class
+
+    # Unrestrict if still restricted
+    guild_id = message.guild.id
+    is_restricted = restrict_event_class.verify_guild_member(guild_id, member.id)
+    if is_restricted:
+        kwarg = restriction.kwarg_disable
+        await member.edit(**kwarg)
+    else:
+        return f"User {member_name} is not time-{restriction.name_past}"
+
+async def restrictionlist(message, parameters, restriction):
+    """ Get list of currently restricted members on requested guild. """
+    length = len(parameters)
+    required_length = 1
+
+    # Validate length
+    if length > required_length:
+        return "Error: Too many parameters"
+
+    restrict_event_class = restriction.restrict_event_class
+
+    return restrict_event_class.get_formatted_list(message.guild.id)
 
 async def process_message(message):
     """ Handle message reply. """
@@ -240,7 +389,6 @@ async def process_message(message):
         # Handle input
         parameters = re.findall("\S+", message.content)
         command = parameters[0]
-        global commands
         command_exists = command in commands_map
 
         # Reply highlight
@@ -287,195 +435,51 @@ def get_help(parameters):
 
 async def mute(message, parameters):
     """ Mute someone for given number of seconds. """
-    length = len(parameters)
-    required_length = 3
-
-    # Validate length
-    if length == 1:
-        return "Error: No 'member' parameter was given"
-    if length == 2:
-        return "Error: No 'seconds' parameter was given"
-    if length > required_length:
-        return "Error: Too many parameters"
-    
-    member_name = parameters[1]
-    member_id = extract_id(member_name)
-    seconds_str = parameters[2]
-
-    # Validate author permissions
-    can_mute = validate_permission(message, lambda role: role.permissions.mute_members)
-
-    if not can_mute:
-        return f"Error: User '{author.name}' doesn't have permission to mute"
-
-    # Validate member
-    member = find_member(message, member_id)
-    is_member_valid = member != None
-
-    if not is_member_valid:
-        return f"Error: User '{member_name}' not found on this server"
-
-    # Validate seconds
-    try:
-        is_seconds_number = re.search("\D", seconds_str) == None
-        seconds = int(seconds_str)
-        is_seconds_on_bounds = seconds > 0 and seconds <= 3600
-        is_seconds_valid = is_seconds_number and is_seconds_on_bounds
-    except ValueError:
-        is_seconds_valid = False
-
-    if not is_seconds_valid:
-        return ("Error: Invalid amount of seconds, " + 
-               "it has to be an integer between 1 and 3600")
-
-    # Mute and sleep
-    try:
-        await member.edit(mute=True)
-    except discord.errors.HTTPException as e:
-        return "Error: User is not in voice chat"
-
-    mute_event = MuteEvent(message.guild, member, seconds)
-    reply = f"User {member.name} is muted for {seconds} seconds"
-    await message.channel.send(reply)
-    await asyncio.sleep(seconds)
-    
-    # Unmute if still muted
-    guild_id = message.guild.id
-    is_muted = MuteEvent.verify_guild_member(guild_id, member.id)
-    if is_muted:
-        await member.edit(mute=False)
+    restriction = restriction_map["mute"]
+    return await restrict(message, parameters, restriction)
 
 async def unmute(message, parameters):
     """ Unmute a muted member. """
-    length = len(parameters)
-    required_length = 2
-
-    # Validate length
-    if length == 1:
-        return "Error: No 'member' parameter was given"
-    if length > required_length:
-        return "Error: Too many parameters"
-
-    member_name = parameters[1]
-    member_id = extract_id(member_name)
-
-    # Validate member
-    member = find_member(message, member_id)
-    is_member_valid = member != None
-
-    if not is_member_valid:
-        return f"Error: User '{member_name}' not found on this server"
-
-    # Unmute if still muted
-    guild_id = message.guild.id
-    is_muted = MuteEvent.verify_guild_member(guild_id, member.id)
-    if is_muted:
-        await member.edit(mute=False)
-    else:
-        return f"User {member_name} is not time-muted"
+    restriction = restriction_map["mute"]
+    return await unrestrict(message, parameters, restriction)
 
 async def mutelist(message, parameters):
     """ Get list of currently muted members on requested guild. """
-    length = len(parameters)
-    required_length = 1
-
-    # Validate length
-    if length > required_length:
-        return "Error: Too many parameters"
-
-    return MuteEvent.get_formatted_list(message.guild.id)
+    restriction = restriction_map["mute"]
+    return await restrictionlist(message, parameters, restriction)
 
 async def deaf(message, parameters):
     """ Deafen someone for given number of seconds. """
-    length = len(parameters)
-    required_length = 3
-
-    # Validate length
-    if length == 1:
-        return "Error: No 'member' parameter was given"
-    if length == 2:
-        return "Error: No 'seconds' parameter was given"
-    if length > required_length:
-        return "Error: Too many parameters"
-    
-    member_name = parameters[1]
-    member_id = extract_id(member_name)
-    seconds_str = parameters[2]
-
-    # Validate author permissions
-    can_deaf = validate_permission(message, lambda role: role.permissions.deafen_members)
-
-    if not can_deaf:
-        return f"Error: User '{author.name}' doesn't have permission to deafen"
-
-    # Validate member
-    member = find_member(message, member_id)
-    is_member_valid = member != None
-
-    if not is_member_valid:
-        return f"Error: User '{member_name}' not found on this server"
-
-    # Validate seconds
-    try:
-        is_seconds_number = re.search("\D", seconds_str) == None
-        seconds = int(seconds_str)
-        is_seconds_on_bounds = seconds > 0 and seconds <= 3600
-        is_seconds_valid = is_seconds_number and is_seconds_on_bounds
-    except ValueError:
-        is_seconds_valid = False
-
-    if not is_seconds_valid:
-        return ("Error: Invalid amount of seconds, " + 
-               "it has to be an integer between 1 and 3600")
-
-    # Mute and sleep
-    try:
-        await member.edit(deafen=True)
-    except discord.errors.HTTPException as e:
-        return "Error: User is not in voice chat"
-
-    deaf_event = DeafEvent(message.guild, member, seconds)
-    reply = f"User {member.name} is deafened for {seconds} seconds"
-    await message.channel.send(reply)
-    await asyncio.sleep(seconds)
-    
-    # Undeaf if still deafened
-    guild_id = message.guild.id
-    is_deafen = DeafEvent.verify_guild_member(guild_id, member.id)
-    if is_deafen:
-        await member.edit(deafen=False)
+    restriction = restriction_map["deaf"]
+    return await restrict(message, parameters, restriction)
 
 async def undeaf(message, parameters):
     """ Undeaf a deafened member. """
-    length = len(parameters)
-    required_length = 2
-
-    # Validate length
-    if length == 1:
-        return "Error: No 'member' parameter was given"
-    if length > required_length:
-        return "Error: Too many parameters"
-
-    member_name = parameters[1]
-    member_id = extract_id(member_name)
-
-    # Validate member
-    member = find_member(message, member_id)
-    is_member_valid = member != None
-
-    if not is_member_valid:
-        return f"Error: User '{member_name}' not found on this server"
-
-    # Undeaf if still deafened
-    guild_id = message.guild.id
-    is_deafen = DeafEvent.verify_guild_member(guild_id, member.id)
-    if is_deafen:
-        await member.edit(deafen=False)
-    else:
-        return f"User {member_name} is not time-deafened"
+    restriction = restriction_map["deaf"]
+    return await unrestrict(message, parameters, restriction)
 
 async def deaflist(message, parameters):
     """ Get list of currently deafened members on requested guild. """
+    restriction = restriction_map["deaf"]
+    return await restrictionlist(message, parameters, restriction)
+
+async def amputate(message, parameters):
+    """ Amputate someone for given number of seconds. """
+    restriction = restriction_map["amputate"]
+    return await restrict(message, parameters, restriction)
+
+async def unamputate(message, parameters):
+    """ Unamputate a amputated member. """
+    restriction = restriction_map["amputate"]
+    return await unrestrict(message, parameters, restriction)
+
+async def deaflist(message, parameters):
+    """ Get list of currently amputated members on requested guild. """
+    restriction = restriction_map["amputate"]
+    return await restrictionlist(message, parameters, restriction)
+
+async def serverlist(message, parameters):
+    """ Request list of servers in which TPoseBot is present. """
     length = len(parameters)
     required_length = 1
 
@@ -483,7 +487,14 @@ async def deaflist(message, parameters):
     if length > required_length:
         return "Error: Too many parameters"
 
-    return DeafEvent.get_formatted_list(message.guild.id)
+    guilds = client.guilds
+    guild_names = [guild.name for guild in guilds]
+
+    guilds = sorted(guilds, key=lambda guild: guild.name)
+    formatted_guilds = [f"{guild.name} | Member count: {len(guild.members)}" 
+                       for guild in guilds]
+
+    return '\n'.join(formatted_guilds) + "\n\n" + f"Amount: {len(formatted_guilds)}"
 
 async def tpose(message, parameters):
     """ Request random tpose image. """
@@ -494,7 +505,6 @@ async def tpose(message, parameters):
     if length > required_length:
         return "Error: Too many parameters"
 
-    global srcs
     src = random.choice(srcs)
 
     return src
@@ -505,9 +515,9 @@ async def tpose(message, parameters):
 loop = asyncio.get_event_loop()
 
 # Tpose image srcs
-srcs = request_tpose_srcs(max_page=4)
+srcs = request_tpose_srcs(max_page=5)
 
-# Map string to object
+# Map string to command description object
 commands = {
     "help": Command(f"{prefix}help",
                     ("Provides brief description for all commands, " +
@@ -532,6 +542,9 @@ commands = {
     "deaflist": Command(f"{prefix}deaflist",
                      "Get list of currently deafened users in this server",
                      f"\n{prefix}deaflist"),
+    "serverlist": Command(f"{prefix}serverlist",
+                     "Get list of servers in which TPoseBot is present",
+                     f"\n{prefix}serverlist"),
     "tpose": Command(f"{prefix}tpose",
                      "Get random tpose image",
                      f"\n{prefix}tpose")
@@ -546,7 +559,27 @@ commands_map = {
     f"{prefix}deaf": deaf,
     f"{prefix}undeaf": undeaf,
     f"{prefix}deaflist": deaflist,
+    f"{prefix}serverlist": serverlist,
     f"{prefix}tpose": tpose
+}
+
+# Map string to restriction data object
+restriction_map = {
+    "amputate": Restriction("amputate", 
+                            "amputated", 
+                            lambda role: role.permissions.manage_messages, 
+                            AmputateEvent, 
+                            "roles"),
+    "deaf": Restriction("deaf",
+                        "deafen", 
+                        lambda role: role.permissions.deafen_members, 
+                        DeafEvent,
+                        "deaf"),
+    "mute": Restriction("mute", 
+                        "muted", 
+                        lambda role: role.permissions.mute_members, 
+                        MuteEvent,
+                        "mute")
 }
 
 bot_id = 647954736959717416

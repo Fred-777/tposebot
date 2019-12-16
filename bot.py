@@ -8,38 +8,41 @@ import random
 import re
 import requests
 
+from typing import *
+
 """
 with open("C:/Users/Usuario/Downloads/discord-bot/bot.py") as file:
     exec(file.read())
 """
 
-# Load environment
-base_path = "C:/Users/Usuario/Downloads/discord-bot"
-os.chdir(base_path)
-
-env_path = "./.env"
-bad_words_path = "./bad-words.txt"
-extra_srcs_path = "./extra-srcs.txt"
-
-dotenv.load_dotenv(env_path)
-
 # ---------- Environment variables ---------- #
+
+base_path = "C:/Users/Usuario/Downloads/discord-bot"
+env_path = "./.env"
+os.chdir(base_path)
+dotenv.load_dotenv(env_path)
 
 prefix = os.getenv("prefix")
 token = os.getenv("token")
 sc_param = os.getenv("sc_param")
 
+bad_words_path = "./bad-words.txt"
+extra_srcs_path = "./extra-srcs.txt"
+report_path = "./report.txt"
+
+# ---------- Load environment ---------- #
+
 with open(bad_words_path) as file:
     data = file.read()
-bad_word_regexes = json.loads(data)
+    bad_word_regexes = json.loads(data)
 
 with open(extra_srcs_path) as file:
     data = file.read()
-extra_srcs = json.loads(data)
+    extra_srcs = json.loads(data)
 
 # ---------- Class helpers ---------- #
 
-def get_raw_guilds():
+def get_raw_guilds() -> List[Dict]:
     """ Get guilds in which the bot exists. """
     url = "https://discordapp.com/api/v6/users/@me/guilds"
     headers = {"Authorization": f"Bot {token}"}
@@ -52,33 +55,20 @@ def get_raw_guilds():
 
 class Command:
     """ Describe a command available from bot. """
-    def __init__(self, name, description, example):
+    def __init__(self, name: str, description: str, example: str):
         self.name = name
         self.description = description
         self.example = example
 
-    def get_brief_data(self):
+    def get_brief_data(self) -> str:
         return f"{self.name}: {self.description}"
 
-    def get_extended_data(self):
+    def get_extended_data(self) -> str:
         return (f"Description: \n{self.description}\n\n" +
                 f"Example: {self.example}")
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.name
-
-class Restriction:
-    """ Restriction filled with data to be used as restrict argument. """
-    def __init__(self, name_present, name_past, function_role, restrict_event_class, kwarg):
-        self.name_present = name_present
-        self.name_past = name_past
-        self.function_role = function_role
-        self.restrict_event_class = restrict_event_class
-        self.kwarg_enable = {kwarg: True}
-        self.kwarg_disable = {kwarg: False}
-
-    def __repr__(self):
-        return self.name_present
 
 class RestrictEvent:
     """
@@ -91,53 +81,53 @@ class RestrictEvent:
     guild_ids = [int(raw_guild["id"]) for raw_guild in raw_guilds]
     events = {guild_id: {} for guild_id in guild_ids}
 
-    def __init__(self, member, seconds):
+    def __init__(self, member: discord.member.Member, seconds: int):
         self.member = member
         self.seconds = seconds
         self.start_time = loop.time()
 
-    def get_remaining_seconds(self):
+    def get_remaining_seconds(self) -> int:
         """ Calculate amount of remaining seconds to end mute. """
         seconds_passed = int(loop.time() - self.start_time)
         return self.seconds - seconds_passed
 
     @classmethod
-    def add_guild(cls, guild_id):
+    def add_guild(cls, guild_id) -> None:
         """ Add guild to event dict. """
         cls.events[guild_id] = {}
 
     @classmethod
-    def remove_guild(cls, guild_id):
+    def remove_guild(cls, guild_id) -> None:
         """ Remove guild from event dict. """
         del cls.events[guild_id]
 
     @classmethod
-    def add_event(cls, guild_id, event):
+    def add_event(cls, guild_id, event) -> None:
         """ Add event to event guild dict. """
         cls.events[guild_id][event.member.id] = event
 
     @classmethod
-    def remove_event(cls, guild_id, member_id):
+    def remove_event(cls, guild_id, member_id) -> None:
         """ Remove event from event guild dict. """
         del cls.events[guild_id][member_id]
 
     @classmethod
-    def verify_guild(cls, guild_id):
+    def verify_guild(cls, guild_id) -> bool:
         """ Verify if events dict has guild by id. """
         return guild_id in cls.events
 
     @classmethod
-    def verify_guild_member(cls, guild_id, member_id):
+    def verify_guild_member(cls, guild_id, member_id) -> bool:
         """ Verify if event guild dict has member by id. """
         return member_id in cls.events[guild_id]
 
     @classmethod
-    def get_events(cls, guild_id):
+    def get_events(cls, guild_id) -> bool:
         """ Get list of events in a given guild. """
         return cls.events[guild_id].values()
 
     @classmethod
-    def get_formatted_list(cls, guild_id):
+    def get_formatted_list(cls, guild_id) -> str:
         """ Get formatted list of running mute events in a guild. """
         events = sorted(cls.get_events(guild_id), key=lambda event: event.member.name)
         if len(events) == 0:
@@ -152,7 +142,7 @@ class MuteEvent(RestrictEvent):
     """ Mute event on progress. """
     events = RestrictEvent.events.copy()
 
-    def __init__(self, guild, member, seconds):
+    def __init__(self, guild: discord.guild.Guild, member: discord.member.Member, seconds: int):
         super().__init__(member, seconds)
         MuteEvent.add_event(guild.id, self)
 
@@ -160,7 +150,7 @@ class DeafEvent(RestrictEvent):
     """ Deaf event on progress. """
     events = RestrictEvent.events.copy()
 
-    def __init__(self, guild, member, seconds):
+    def __init__(self, guild: discord.guild.Guild, member: discord.member.Member, seconds: int):
         super().__init__(member, seconds)
         DeafEvent.add_event(guild.id, self)
 
@@ -168,9 +158,39 @@ class AmputateEvent(RestrictEvent):
     """ Deaf event on progress. """
     events = RestrictEvent.events.copy()
 
-    def __init__(self, guild, member, seconds):
+    def __init__(self, guild: discord.guild.Guild, member: discord.member.Member, seconds: int):
         super().__init__(member, seconds)
         AmputateEvent.add_event(guild.id, self)
+
+class Restriction:
+    """ Restriction filled with data to be used as restrict argument. """
+    def __init__(self, name_present: str, name_past: str, function_role: Callable, 
+                                                          restrict_event_class: RestrictEvent):
+        self.name_present = name_present
+        self.name_past = name_past
+        self.function_role = function_role
+        self.restrict_event_class = restrict_event_class
+
+    def __repr__(self):
+        return self.name_present
+
+class BooleanRestriction(Restriction):
+    """ Restriction managed through boolean value. """
+    def __init__(self, name_present: str, name_past: str, function_role: Callable, 
+                                                          restrict_event_class: RestrictEvent, 
+                                                          kwarg_key: str):
+        super().__init__(name_present, name_past, function_role, restrict_event_class)
+        self.kwarg_enable = {kwarg_key: True}
+        self.kwarg_disable = {kwarg_key: False}
+
+class RoleRestriction(Restriction):
+    """ Restriction managed through role list. """
+    def __init__(self, name_present: str, name_past: str, function_role: Callable, 
+                                                          restrict_event_class: RestrictEvent, 
+                                                          kwarg_key: str):
+        super().__init__(name_present, name_past, function_role, restrict_event_class)
+        self.kwarg_enable = "nada"
+        self.kwarg_disable = "nada"
 
 # ---------- Internal functions ---------- #
 
@@ -190,7 +210,7 @@ def get_random_pediu():
 
     return result
 
-def request_images(query_param, max_page=1):
+def request_image_srcs(query_param, max_page=1):
     """ Return image srcs found until a given page from query service. """
     base_url = "http://results.dogpile.com"
     headers = {
@@ -215,7 +235,7 @@ def request_images(query_param, max_page=1):
 
 def request_tpose_srcs(max_page=1):
     """ Request tpose image srcs. """
-    srcs = request_images("tpose", max_page)
+    srcs = request_image_srcs("tpose", max_page)
 
     for src in extra_srcs:
         srcs.append(src)
@@ -223,17 +243,19 @@ def request_tpose_srcs(max_page=1):
     return srcs
 
 def replace_bad_words(s):
-    """ Replace bad words in a message. """
+    """ Replace bad words in a message. Return filtered message and amount of filtered words """
     words = re.findall("\S+", s) or []
+    bad_word_amount = 0
 
     bad_words = {word for word in words 
-                 if any(word.search(bad_word_regex, word.lower()) != None) 
-                 for bad_word_regex in bad_word_regexes}
+                 if any(re.search(f"\\b{bad_word_regex}\\b", word.lower()) != None 
+                 for bad_word_regex in bad_word_regexes)}
     
     for bad_word in bad_words:
         s = re.sub(bad_word, "#" * len(bad_word), s)
+        bad_word_amount += 1
 
-    return s
+    return s, bad_word_amount
 
 async def restrict(message, parameters, restriction):
     """ Restrict someone for given number of seconds. """
@@ -291,7 +313,6 @@ async def restrict(message, parameters, restriction):
         kwarg = restriction.kwarg_enable
         await member.edit(**kwarg)
     except discord.errors.HTTPException as e:
-        voice_restrictions = {"deaf", "mute"}
         if restriction.name_present in voice_restrictions:
             return "Error: User is not in voice chat"
         else:
@@ -379,6 +400,9 @@ async def process_message(message):
     if not sent_by_bot and not is_empty:
 
         print(f"Message received: {message.content}")
+        
+        replaced_content, bad_word_amount = replace_bad_words(message.content)
+
         # Handle special messages
         if message.content.lower().startswith("quem"):
             return get_random_pediu()
@@ -402,7 +426,7 @@ async def process_message(message):
         # Run command
         elif command_exists:
             command_function = commands_map[command]
-            reply = await command_function(message, parameters)
+            reply = await command_function(message, parameters) 
 
     return reply
 
@@ -415,7 +439,10 @@ def suggest_help():
 def get_help(parameters):
     """ Describe all commands briefly or a given command extensively. """
     length = len(parameters)
-    if length > 2:
+    required_lengths = {1, 2}
+    max_required_length = max(required_lengths)
+
+    if length > max_required_length:
         return "Error: Too many parameters"
 
     # General help
@@ -433,19 +460,43 @@ def get_help(parameters):
     except KeyError:
         return "Error: Invalid command was given"
 
-async def mute(message, parameters):
-    """ Mute someone for given number of seconds. """
-    restriction = restriction_map["mute"]
+async def report(message, parameters):
+    """ Report a bug. """
+    length = len(parameters)
+    min_required_length = 2
+
+    if length < min_required_length:
+        return "Error: No 'message' parameter was given"
+
+    content = message.content
+    report_message_match = re.search(f"{prefix}report\s+", content)
+    report_message_index = report_message_match.end()
+    report_message = content[report_message_index :]
+
+    min_message_length = 5
+    is_message_length_low = len(report_message) < min_message_length
+
+    if is_message_length_low:
+        return (f"Error: Message length is too low, " +
+                f"should have at least {min_message_length} characters")
+
+    with open(report_path, "a") as file:
+        file.write(f"- {report_message}\n")
+    return "Thank you for helping!"
+
+async def amputate(message, parameters):
+    """ Amputate someone for given number of seconds. """
+    restriction = restriction_map["amputate"]
     return await restrict(message, parameters, restriction)
 
-async def unmute(message, parameters):
-    """ Unmute a muted member. """
-    restriction = restriction_map["mute"]
+async def unamputate(message, parameters):
+    """ Unamputate a amputated member. """
+    restriction = restriction_map["amputate"]
     return await unrestrict(message, parameters, restriction)
 
-async def mutelist(message, parameters):
-    """ Get list of currently muted members on requested guild. """
-    restriction = restriction_map["mute"]
+async def amputatelist(message, parameters):
+    """ Get list of currently amputated members on requested guild. """
+    restriction = restriction_map["amputate"]
     return await restrictionlist(message, parameters, restriction)
 
 async def deaf(message, parameters):
@@ -463,19 +514,19 @@ async def deaflist(message, parameters):
     restriction = restriction_map["deaf"]
     return await restrictionlist(message, parameters, restriction)
 
-async def amputate(message, parameters):
-    """ Amputate someone for given number of seconds. """
-    restriction = restriction_map["amputate"]
+async def mute(message, parameters):
+    """ Mute someone for given number of seconds. """
+    restriction = restriction_map["mute"]
     return await restrict(message, parameters, restriction)
 
-async def unamputate(message, parameters):
-    """ Unamputate a amputated member. """
-    restriction = restriction_map["amputate"]
+async def unmute(message, parameters):
+    """ Unmute a muted member. """
+    restriction = restriction_map["mute"]
     return await unrestrict(message, parameters, restriction)
 
-async def deaflist(message, parameters):
-    """ Get list of currently amputated members on requested guild. """
-    restriction = restriction_map["amputate"]
+async def mutelist(message, parameters):
+    """ Get list of currently muted members on requested guild. """
+    restriction = restriction_map["mute"]
     return await restrictionlist(message, parameters, restriction)
 
 async def serverlist(message, parameters):
@@ -488,13 +539,14 @@ async def serverlist(message, parameters):
         return "Error: Too many parameters"
 
     guilds = client.guilds
+    header = f"{len(guilds)} servers found:\n\n"
     guild_names = [guild.name for guild in guilds]
 
     guilds = sorted(guilds, key=lambda guild: guild.name)
     formatted_guilds = [f"{guild.name} | Member count: {len(guild.members)}" 
                        for guild in guilds]
 
-    return '\n'.join(formatted_guilds) + "\n\n" + f"Amount: {len(formatted_guilds)}"
+    return header + "\n".join(formatted_guilds)
 
 async def tpose(message, parameters):
     """ Request random tpose image. """
@@ -511,11 +563,14 @@ async def tpose(message, parameters):
 
 # ---------- Application variables ---------- #
 
+bot_id = 647954736959717416
+client = discord.Client()
+
 # Async scheduler
 loop = asyncio.get_event_loop()
 
 # Tpose image srcs
-srcs = request_tpose_srcs(max_page=5)
+srcs = request_tpose_srcs(max_page=3)
 
 # Map string to command description object
 commands = {
@@ -524,6 +579,20 @@ commands = {
                     "or extended description for a specific command " +
                     "if any is given"),
                     f"Get help for a command\n{prefix}help mute"),
+    "report": Command(f"{prefix}report",
+                    "Report a bug", 
+                    (f"Report a permission related bug" + 
+                    f"\n{prefix}report administrators are not having permission to mute")),
+    "amputate": Command(f"{prefix}amputate",
+                    ("Amputate user for a given number of seconds, creates role 'amputated'," +
+                     "amputated users cannot send messages in text channels"), 
+                    f"Amputate Fred for 30 seconds\n{prefix}amputate @Fred 30"),
+    "unamputate": Command(f"{prefix}unamputate",
+                    "Unamputate a amputated user", 
+                    f"Unamputate Fred\n{prefix}unamputate @Fred"),
+    "amputatelist": Command(f"{prefix}amputatelist",
+                     "Get list of currently amputated users in this server",
+                     f"\n{prefix}amputatelist"),
     "mute": Command(f"{prefix}mute",
                     "Mute user for a given number of seconds", 
                     f"Mute Fred for 30 seconds\n{prefix}mute @Fred 30"),
@@ -553,37 +622,41 @@ commands = {
 # Map string to function
 commands_map = {
     f"{prefix}help": get_help,
-    f"{prefix}mute": mute,
-    f"{prefix}unmute": unmute,
-    f"{prefix}mutelist": mutelist,
+    f"{prefix}report": report,
+    f"{prefix}amputate": amputate,
+    f"{prefix}unamputate": unamputate,
+    f"{prefix}amputatelist": amputatelist,
     f"{prefix}deaf": deaf,
     f"{prefix}undeaf": undeaf,
     f"{prefix}deaflist": deaflist,
+    f"{prefix}mute": mute,
+    f"{prefix}unmute": unmute,
+    f"{prefix}mutelist": mutelist,
     f"{prefix}serverlist": serverlist,
     f"{prefix}tpose": tpose
 }
 
 # Map string to restriction data object
 restriction_map = {
-    "amputate": Restriction("amputate", 
-                            "amputated", 
-                            lambda role: role.permissions.manage_messages, 
-                            AmputateEvent, 
-                            "roles"),
-    "deaf": Restriction("deaf",
-                        "deafen", 
-                        lambda role: role.permissions.deafen_members, 
-                        DeafEvent,
-                        "deaf"),
-    "mute": Restriction("mute", 
-                        "muted", 
-                        lambda role: role.permissions.mute_members, 
-                        MuteEvent,
-                        "mute")
+    "amputate": RoleRestriction("amputate", 
+                                "amputated", 
+                                lambda role: role.permissions.manage_messages, 
+                                AmputateEvent, 
+                                "roles"),
+    "deaf": BooleanRestriction("deaf",
+                               "deafened", 
+                               lambda role: role.permissions.deafen_members, 
+                               DeafEvent,
+                               "deafen"),
+    "mute": BooleanRestriction("mute", 
+                               "muted", 
+                               lambda role: role.permissions.mute_members, 
+                               MuteEvent,
+                               "mute")
 }
 
-bot_id = 647954736959717416
-client = discord.Client()
+event_classes = {AmputateEvent, DeafEvent, MuteEvent}
+voice_restrictions = {"deaf", "mute"}
 
 # ---------- Event listeners ---------- #
 
@@ -626,8 +699,8 @@ async def on_guild_join(guild):
 
     # Add guild dict
     if was_bot_added:
-        MuteEvent.add_guild(guild.id)
-        DeafEvent.add_guild(guild.id)
+        for event_class in event_classes:
+            event_class.add_guild(guild.id)
 
 # Member leave guild
 @client.event
@@ -636,7 +709,7 @@ async def on_member_remove(member):
 
     # Remove guild dict
     if was_bot_removed:
-        MuteEvent.remove_guild(member.guild.id)
-        DeafEvent.remove_guild(member.guild.id)
+        for event_class in event_classes:
+            event_class.remove_guild(member.guild.id)
 
 client.run(token)

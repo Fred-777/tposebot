@@ -2,6 +2,8 @@
 from __future__ import annotations
 # General types
 from typing import *
+# Abstract classes and methods
+from abc import ABC, abstractmethod
 
 import asyncio
 import bs4
@@ -54,6 +56,14 @@ def get_raw_guilds() -> List[Dict]:
 
     return raw_guilds
 
+def format_code_block(text: str) -> str:
+    """ Format text to multiline code block. """
+    return f"```\n{text}\n```"
+
+def create_amputated_role() -> None:
+    """ Create role 'Amputated' if it doesn't exist on each guild the bot is in. """
+    pass
+
 # ---------- Classes ---------- #
 
 class Command:
@@ -73,13 +83,27 @@ class Command:
     def __repr__(self):
         return self.name
 
-class RestrictEvent:
-    """ Base class for event monitoring. """
+class RestrictEvent(ABC):
+    """ Base class for restriction event management. """
     raw_guilds: List[Dict] = get_raw_guilds()
     guild_ids: List[int] = [int(raw_guild["id"]) for raw_guild in raw_guilds]
+    events: Dict[int, Dict[int, RestrictEvent]] = {guild_id: {} for guild_id in guild_ids}
 
-    events: Dict[int, Dict[int, RestrictEvent]] = {guild_id: {} 
-                                                   for guild_id in guild_ids}
+    @property
+    def name_present(self):
+        raise NotImplementedError("RestrictEvent.name_present not implemented")
+
+    @property
+    def name_past(self):
+        raise NotImplementedError("RestrictEvent.name_past not implemented")
+
+    @property
+    def function_role(self):
+        raise NotImplementedError("RestrictEvent.function_role not implemented")
+
+    @property
+    def kwarg_key(self):
+        raise NotImplementedError("RestrictEvent.kwarg_key not implemented")
 
     def __init__(self, member: discord.Member, seconds: int):
         self.member: discord.Member = member
@@ -103,24 +127,34 @@ class RestrictEvent:
         del cls.events[guild_id]
 
     @classmethod
-    def add_event(cls, guild_id: int, event: RestrictEvent) -> None:
-        """ Add event to event guild dict. """
-        cls.events[guild_id][event.member.id] = event
-
-    @classmethod
-    def remove_event(cls, guild_id: int, member_id: int) -> None:
-        """ Remove event from event guild dict. """
-        del cls.events[guild_id][member_id]
-
-    @classmethod
     def verify_guild(cls, guild_id: int) -> bool:
         """ Verify if events dict has guild by id. """
         return guild_id in cls.events
 
     @classmethod
-    def verify_guild_member(cls, guild_id: int, member_id: int) -> bool:
+    def get_guild(cls, guild_id: int) -> discord.Guild:
+        """ Get guild from event dict. """
+        return cls.events[guild_id]
+
+    @classmethod
+    def add_event(cls, guild_id: int, event: RestrictEvent) -> None:
+        """ Add event to event guild dict. """
+        cls.events[guild_id][event.member.id] = event
+
+    @classmethod
+    def remove_event(cls, guild_id: int, event_id: int) -> None:
+        """ Remove event from event guild dict. """
+        del cls.events[guild_id][event_id]
+
+    @classmethod
+    def verify_event(cls, guild_id: int, event_id: int) -> bool:
         """ Verify if event guild dict has member by id. """
-        return member_id in cls.events[guild_id]
+        return event_id in cls.events[guild_id]
+
+    @classmethod
+    def get_event(cls, guild_id: int, event_id: int) -> RestrictEvent:
+        """ Verify if event guild dict has member by id. """
+        return cls.events[guild_id][event_id]
 
     @classmethod
     def get_events(cls, guild_id: int) -> Iterator[RestrictEvent]:
@@ -133,73 +167,90 @@ class RestrictEvent:
         events: List[RestrictEvent] = sorted(cls.get_events(guild_id), 
                                              key=lambda event: event.member.name)
         if len(events) == 0:
-            return "List is empty"
+            return f"There are no {cls.name_past} users"
         
-        formatted_events: str = [(f"{event.member.name}: " + 
-                                  f"{event.get_remaining_seconds()} seconds") 
-                                  for event in events]
+        events_data: str = [(f"{event.member.name}: " + 
+                             f"{event.get_remaining_seconds()} seconds") 
+                             for event in events]
 
-        return "\n".join(formatted_events)
+        formatted_events: str = "\n".join(events_data)
 
-class MuteEvent(RestrictEvent):
-    """ Mute event on progress. """
-    events: Dict[int, Dict[int, RestrictEvent]] = RestrictEvent.events.copy()
+        return format_code_block(formatted_events)
 
-    def __init__(self, guild: discord.Guild, member: discord.Member, seconds: int):
-        super().__init__(member, seconds)
-        MuteEvent.add_event(guild.id, self)
+    @abstractmethod
+    def get_kwarg_enable(self) -> Dict[str, Any]:
+        """ Enable restriction and return required enable kwarg. """
+        raise NotImplementedError("RestrictEvent.enable not implemented")
 
-class DeafEvent(RestrictEvent):
-    """ Deaf event on progress. """
-    events: Dict[int, Dict[int, RestrictEvent]] = RestrictEvent.events.copy()
-
-    def __init__(self, guild: discord.Guild, member: discord.Member, seconds: int):
-        super().__init__(member, seconds)
-        DeafEvent.add_event(guild.id, self)
+    @abstractmethod
+    def get_kwarg_disable(self) -> Dict[str, Any]:
+        """ Disable restriction and return required disable kwarg. """
+        raise NotImplementedError("RestrictEvent.disable not implemented")
 
 class AmputateEvent(RestrictEvent):
     """ Amputate event on progress. """
     events: Dict[int, Dict[int, RestrictEvent]] = RestrictEvent.events.copy()
 
+    name_present: str = "amputate"
+    name_past: str = "amputated"
+    function_role: Callable = lambda role: role.permissions.manage_messages
+    kwarg_key: str = "roles"
+
     def __init__(self, guild: discord.Guild, member: discord.Member, seconds: int):
         super().__init__(member, seconds)
         AmputateEvent.add_event(guild.id, self)
 
-class Restriction:
-    """ Restriction filled with data to be used as restrict argument. """
-    def __init__(self, name_present: str, 
-                       name_past: str, 
-                       function_role: Callable, 
-                       restrict_event_class: ClassVar[RestrictEvent]):
-        self.name_present: str = name_present
-        self.name_past: str = name_past
-        self.function_role: Callable = function_role
-        self.restrict_event_class: ClassVar[RestrictEvent] = restrict_event_class
+        self.previous_roles: List[discord.Role] = self.member.roles
 
-    def __repr__(self):
-        return self.name_present
+    def get_kwarg_enable(self) -> Dict[str, List[discord.Role]]:
+        """ Enable restriction and return required enable kwarg. """
+        return {self.kwarg_key: []}
 
-class BooleanRestriction(Restriction):
-    """ Restriction managed through boolean value. """
-    def __init__(self, name_present: str, 
-                       name_past: str, 
-                       function_role: Callable, 
-                       restrict_event_class: ClassVar[RestrictEvent], 
-                       kwarg_key: str):
-        super().__init__(name_present, name_past, function_role, restrict_event_class)
-        self.kwarg_enable: Dict[str, bool] = {kwarg_key: True}
-        self.kwarg_disable: Dict[str, bool] = {kwarg_key: False}
+    def get_kwarg_disable(self) -> Dict[str, List[discord.Role]]:
+        """ Disable restriction and return required disable kwarg. """
+        return {self.kwarg_key: []}
 
-class RoleRestriction(Restriction):
-    """ Restriction managed through role list. """
-    def __init__(self, name_present: str, 
-                       name_past: str, 
-                       function_role: Callable, 
-                       restrict_event_class: ClassVar[RestrictEvent], 
-                       kwarg_key: str):
-        super().__init__(name_present, name_past, function_role, restrict_event_class)
-        self.kwarg_enable = "nada"
-        self.kwarg_disable = "nada"
+class DeafEvent(RestrictEvent):
+    """ Deaf event on progress. """
+    events: Dict[int, Dict[int, RestrictEvent]] = RestrictEvent.events.copy()
+
+    name_present: str = "deaf"
+    name_past: str = "deafened"
+    function_role: Callable = lambda role: role.permissions.deafen_members
+    kwarg_key: str = "deafen"
+
+    def __init__(self, guild: discord.Guild, member: discord.Member, seconds: int):
+        super().__init__(member, seconds)
+        DeafEvent.add_event(guild.id, self)
+
+    def get_kwarg_enable(self) -> Dict[str, bool]:
+        """ Enable restriction and return required enable kwarg. """
+        return {self.kwarg_key: True}
+
+    def get_kwarg_disable(self) -> Dict[str, bool]:
+        """ Disable restriction and return required disable kwarg. """
+        return {self.kwarg_key: False}
+
+class MuteEvent(RestrictEvent):
+    """ Mute event on progress. """
+    events: Dict[int, Dict[int, RestrictEvent]] = RestrictEvent.events.copy()
+
+    name_present: str = "mute"
+    name_past: str = "muted"
+    function_role: Callable = lambda role: role.permissions.mute_members
+    kwarg_key: str = "mute"
+
+    def __init__(self, guild: discord.Guild, member: discord.Member, seconds: int):
+        super().__init__(member, seconds)
+        MuteEvent.add_event(guild.id, self)
+
+    def get_kwarg_enable(self) -> Dict[str, bool]:
+        """ Enable restriction and return required enable kwarg. """
+        return {self.kwarg_key: True}
+
+    def get_kwarg_disable(self) -> Dict[str, bool]:
+        """ Disable restriction and return required disable kwarg. """
+        return {self.kwarg_key: False}
 
 # ---------- Internal functions ---------- #
 
@@ -262,8 +313,9 @@ def replace_bad_words(s: str) -> Tuple[str, int]:
 
     return s, bad_word_amount
 
-async def restrict(message: discord.Message, parameters: List[str], 
-                                             restriction: RestrictEvent) -> str:
+async def restrict(message: discord.Message, 
+                   parameters: List[str], 
+                   restrict_event_class: ClassVar[RestrictEvent]) -> str:
     """ Restrict someone for given number of seconds. """
     length: int = len(parameters)
     required_length: int = 3
@@ -281,7 +333,7 @@ async def restrict(message: discord.Message, parameters: List[str],
     seconds_str: str = parameters[2]
 
     # Validate author permissions
-    function_role: Callable = restriction.function_role
+    function_role: Callable = restrict_event_class.function_role
 
     roles: List[discord.Role] = message.author.roles
     role_has_permission: bool = any([function_role(role) for role in roles])
@@ -290,7 +342,7 @@ async def restrict(message: discord.Message, parameters: List[str],
     has_permission: bool = role_has_permission or is_admin or is_owner
 
     if not has_permission:
-        return f"User '{message.author.name}' doesn't have permission to {restriction.name_present}"
+        return f"User '{message.author.name}' doesn't have permission to {restrict_event_class.name_present}"
 
     # Validate member
     members: List[discord.Member] = [member for member in message.guild.members]
@@ -317,29 +369,28 @@ async def restrict(message: discord.Message, parameters: List[str],
                 f"between {min_seconds_amount} and {max_seconds_amount}")
 
     # Restrict and sleep
-    try:
-        kwarg: Dict = restriction.kwarg_enable
-        await member.edit(**kwarg)
-    except discord.errors.HTTPException as e:
-        if restriction.name_present in voice_restrictions:
-            return "User is not in voice chat"
-
-    restrict_event_class: ClassVar[RestrictEvent] = restriction.restrict_event_class
-
     mute_event: RestrictEvent = restrict_event_class(message.guild, member, seconds)
-    reply: str = f"User {member.name} is {restriction.name_past} for {seconds} seconds"
-    await message.channel.send(reply)
-    await asyncio.sleep(seconds)
+    reply: str = f"User {member.name} is {restrict_event_class.name_past} for {seconds} seconds"
+
+    try:
+        kwarg_enable: Dict[str, Any] = mute_event.get_kwarg_enable()
+        await member.edit(**kwarg_enable)
+        await message.channel.send(reply)
+        await asyncio.sleep(seconds)
+    except discord.errors.HTTPException as e:
+        if restrict_event_class.name_present in voice_restrictions:
+            return "User is not in voice chat"
 
     # Unrestrict if still restricted
     guild_id: int = message.guild.id
-    is_restricted: bool = restrict_event_class.verify_guild_member(guild_id, member.id)
+    is_restricted: bool = restrict_event_class.verify_event(guild_id, member.id)
     if is_restricted:
-        kwarg: Dict = restriction.kwarg_disable
-        await member.edit(**kwarg)
+        kwarg_disable: Dict[str, Any] = mute_event.get_kwarg_disable()
+        await member.edit(**kwarg_disable)
 
-async def unrestrict(message: discord.Message, parameters: List[str], 
-                                               restriction: RestrictEvent) -> str:
+async def unrestrict(message: discord.Message, 
+                     parameters: List[str], 
+                     restrict_event_class: ClassVar[RestrictEvent]) -> str:
     """ Unrestrict a restricted member. """
     length: int = len(parameters)
     required_length: int = 2
@@ -354,7 +405,7 @@ async def unrestrict(message: discord.Message, parameters: List[str],
     member_id: int = extract_id(member_name)
 
     # Validate author permissions
-    function_role: Callable = restriction.function_role
+    function_role: Callable = restrict_event_class.function_role
 
     roles: List[discord.Role] = message.author.roles
     role_has_permission: bool = any([function_role(role) for role in roles])
@@ -363,7 +414,7 @@ async def unrestrict(message: discord.Message, parameters: List[str],
     has_permission: bool = role_has_permission or is_admin or is_owner
 
     if not has_permission:
-        return f"User '{message.author.name}' doesn't have permission to {restriction.name_present}"
+        return f"User '{message.author.name}' doesn't have permission to {restrict_event_class.name_present}"
 
     # Validate member
     members: List[discord.Member] = [member for member in message.guild.members]
@@ -373,19 +424,19 @@ async def unrestrict(message: discord.Message, parameters: List[str],
     if not is_member_valid:
         return f"User '{member_name}' not found on this server"
 
-    restrict_event_class: ClassVar[RestrictEvent] = restriction.restrict_event_class
-
     # Unrestrict if still restricted
     guild_id: int = message.guild.id
-    is_restricted: bool = restrict_event_class.verify_guild_member(guild_id, member.id)
+    is_restricted: bool = restrict_event_class.verify_event(guild_id, member.id)
     if is_restricted:
-        kwarg: Dict = restriction.kwarg_disable
-        await member.edit(**kwarg)
+        mute_event: RestrictEvent = restrict_event_class.get_event(guild_id, member.id)
+        kwarg_disable: Dict[str, Any] = mute_event.get_kwarg_disable()
+        await member.edit(**kwarg_disable)
     else:
-        return f"User {member_name} is not time-{restriction.name_past}"
+        return f"User {member_name} is not time-{restrict_event_class.name_past}"
 
-async def restrictionlist(message: discord.Message, parameters: List[str], 
-                                                    restriction: RestrictEvent) -> str:
+async def restrictionlist(message: discord.Message, 
+                          parameters: List[str], 
+                          restrict_event_class: ClassVar[RestrictEvent]) -> str:
     """ Get list of currently restricted members on requested guild. """
     length: int = len(parameters)
     required_length: int = 1
@@ -393,8 +444,6 @@ async def restrictionlist(message: discord.Message, parameters: List[str],
     # Validate length
     if length > required_length:
         return "Too many parameters"
-
-    restrict_event_class: ClassVar[RestrictEvent] = restriction.restrict_event_class
 
     return restrict_event_class.get_formatted_list(message.guild.id)
 
@@ -437,6 +486,46 @@ async def process_message(message: discord.Message) -> str:
             reply: str = await command_function(message, parameters)
 
     return reply
+
+def validate_spam(text: str) -> bool:
+    """ Inform if text received is spam. """
+
+    # Require minimum amount of distinct chars
+    min_distinct_chars_length: int = 5
+
+    distinct_chars: Set[str] = set(text)
+    distinct_chars_length: int = len(distinct_chars)
+    if distinct_chars_length < min_distinct_chars_length:
+        return True
+
+    # Require lowercase letters
+    has_lower: bool = any(char.islower() for char in distinct_chars)
+    if not has_lower:
+        return True
+
+    # Attempt to find recurring pattern
+    has_recurring_pattern: bool = any(text[: length] == text[length : length * 2]
+                                      for length in range(4, len(text) // 2 + 1))
+    if has_recurring_pattern:
+        return True
+
+    # Require some chars to be letters
+    min_letter_percentage: int = 40
+
+    letters: List[str] = [char for char in text if char.isalpha()]
+    letter_percentage: float = (len(letters) / len(text)) * 100
+    if letter_percentage < min_letter_percentage:
+        return True
+
+    # Require some chars to be spaces
+    min_space_percentage: int = 5
+
+    spaces: List[str] = [char for char in text if char == " "]
+    space_percentage: float = (len(spaces) / len(text)) * 100
+    if space_percentage < min_space_percentage:
+        return True
+
+    return False
 
 # ---------- Commands ---------- #
 
@@ -485,61 +574,50 @@ async def report(message: discord.Message, parameters: List[str]) -> str:
     report_message_index = report_message_match.end()
     report_message = content[report_message_index :]
 
-    min_message_length = 5
-    is_message_length_low = len(report_message) < min_message_length
+    is_spam: bool = validate_spam(report_message)
 
-    if is_message_length_low:
-        return (f"Message length is too low, " +
-                f"should have at least {min_message_length} characters")
+    if is_spam:
+        return "Your message was detected as spam and got filtered"
 
     with open(report_path, "a") as file:
-        file.write(f"- {report_message}\n")
+        file.write(f"- {report_message}\n\n")
     return "Thank you for helping!"
 
 async def amputate(message: discord.Message, parameters: List[str]) -> str:
     """ Amputate someone for given number of seconds. """
-    restriction: RestrictEvent = restriction_map["amputate"]
-    return await restrict(message, parameters, restriction)
+    return await restrict(message, parameters, AmputateEvent)
 
 async def unamputate(message: discord.Message, parameters: List[str]) -> str:
     """ Unamputate a amputated member. """
-    restriction: RestrictEvent = restriction_map["amputate"]
-    return await unrestrict(message, parameters, restriction)
+    return await unrestrict(message, parameters, AmputateEvent)
 
 async def amputatelist(message: discord.Message, parameters: List[str]) -> str:
     """ Get list of currently amputated members on requested guild. """
-    restriction: RestrictEvent = restriction_map["amputate"]
-    return await restrictionlist(message, parameters, restriction)
+    return await restrictionlist(message, parameters, AmputateEvent)
 
 async def deaf(message: discord.Message, parameters: List[str]) -> str:
     """ Deafen someone for given number of seconds. """
-    restriction: RestrictEvent = restriction_map["deaf"]
-    return await restrict(message, parameters, restriction)
+    return await restrict(message, parameters, DeafEvent)
 
 async def undeaf(message: discord.Message, parameters: List[str]) -> str:
     """ Undeaf a deafened member. """
-    restriction: RestrictEvent = restriction_map["deaf"]
-    return await unrestrict(message, parameters, restriction)
+    return await unrestrict(message, parameters, DeafEvent)
 
 async def deaflist(message: discord.Message, parameters: List[str]) -> str:
     """ Get list of currently deafened members on requested guild. """
-    restriction: RestrictEvent = restriction_map["deaf"]
-    return await restrictionlist(message, parameters, restriction)
+    return await restrictionlist(message, parameters, DeafEvent)
 
 async def mute(message: discord.Message, parameters: List[str]) -> str:
     """ Mute someone for given number of seconds. """
-    restriction: RestrictEvent = restriction_map["mute"]
-    return await restrict(message, parameters, restriction)
+    return await restrict(message, parameters, MuteEvent)
 
 async def unmute(message: discord.Message, parameters: List[str]) -> str:
     """ Unmute a muted member. """
-    restriction: RestrictEvent = restriction_map["mute"]
-    return await unrestrict(message, parameters, restriction)
+    return await unrestrict(message, parameters, MuteEvent)
 
 async def mutelist(message: discord.Message, parameters: List[str]) -> str:
     """ Get list of currently muted members on requested guild. """
-    restriction: RestrictEvent = restriction_map["mute"]
-    return await restrictionlist(message, parameters, restriction)
+    return await restrictionlist(message, parameters, MuteEvent)
 
 async def serverlist(message: discord.Message, parameters: List[str]) -> str:
     """ Request list of servers in which TPoseBot is present. """
@@ -576,7 +654,7 @@ async def tpose(message: discord.Message, parameters: List[str]) -> str:
 
 # ---------- Application variables ---------- #
 
-bot_id: str = 647954736959717416
+bot_id: int = 647954736959717416
 client: discord.Client = discord.Client()
 
 # Async scheduler
@@ -593,7 +671,7 @@ commands: Dict[str, Command] = {
                     "if any is given"),
                     f"Get help for a command\n{prefix}help mute"),
     "report": Command(f"{prefix}report",
-                    "Report a bug", 
+                    "Send a message to developer (report a bug, request a feature, etc)", 
                     (f"Report a permission related bug" + 
                     f"\n{prefix}report administrators are not having permission to mute")),
     "amputate": Command(f"{prefix}amputate",
@@ -649,25 +727,6 @@ commands_map: Dict[str, Callable] = {
     f"{prefix}tpose": tpose
 }
 
-# Map string to restriction data object
-restriction_map: Dict[str, Restriction] = {
-    "amputate": RoleRestriction("amputate", 
-                                "amputated", 
-                                lambda role: role.permissions.manage_messages, 
-                                AmputateEvent, 
-                                "roles"),
-    "deaf": BooleanRestriction("deaf",
-                               "deafened", 
-                               lambda role: role.permissions.deafen_members, 
-                               DeafEvent,
-                               "deafen"),
-    "mute": BooleanRestriction("mute", 
-                               "muted", 
-                               lambda role: role.permissions.mute_members, 
-                               MuteEvent,
-                               "mute")
-}
-
 event_classes: Set[ClassVar[Restriction]] = {AmputateEvent, DeafEvent, MuteEvent}
 voice_restrictions: Set[str] = {"deaf", "mute"}
 
@@ -698,12 +757,12 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
     # Remove dict element on unmute
     if was_unmuted:
-        if MuteEvent.verify_guild_member(guild_id, member.id):
+        if MuteEvent.verify_event(guild_id, member.id):
             MuteEvent.remove_event(guild_id, member.id)
 
     # Remove dict element on undeaf
     if was_undeafen:
-        if DeafEvent.verify_guild_member(guild_id, member.id):
+        if DeafEvent.verify_event(guild_id, member.id):
             DeafEvent.remove_event(guild_id, member.id)
 
 # Bot join guild

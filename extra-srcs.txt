@@ -1,0 +1,5 @@
+[
+        "https://cdn.discordapp.com/attachments/596741048525389844/651112131592192098/emeraldo.png",
+        "https://cdn.discordapp.com/attachments/596731443741458455/653036358297976861/47398208_220492418848451_3446123931147173888_n.jpg",
+        "https://cdn.discordapp.com/attachments/657242624708706337/657351141046353933/unknown.png"
+]

@@ -1,0 +1,20 @@
+[
+    "fdp",
+    "krl",
+    "caralho",
+    "k7",
+    "vsf",
+    "bitch",
+    "motherfucker",
+    "as+",
+    "cu+",
+    "fuck",
+    "nig+er",
+    "po[rh]+a",
+    "puta",
+    "f[ou]d[ae][ou]?",
+    "shit",
+    "merda",
+    "bosta",
+    "cacete"
+]

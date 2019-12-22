@@ -1,0 +1,4 @@
+- faz um bot rodar um dado ex:
+eu:--d20
+bot:aleatoriza um numero de 1 a 20
+mas pode ser qualquer numero- D0198NV41209847-01UISOUEDVJSAIODYAS=09230-1

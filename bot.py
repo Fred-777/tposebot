@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 
 import asyncio
 import bs4
+import copy
 import discord
 import dotenv
 import json
@@ -33,7 +34,7 @@ sc_param: str = os.getenv("sc_param")
 
 bad_words_path: str = "./bad-words.txt"
 extra_srcs_path: str = "./extra-srcs.txt"
-report_path: str = "./bot-reports.txt"
+report_path: str = "./reports.txt"
 
 # ---------- Load environment ---------- #
 
@@ -45,24 +46,18 @@ with open(extra_srcs_path) as file:
     data: str = file.read()
     extra_srcs: List[str] = json.loads(data)
 
+with open(report_path) as file:
+    data: str = file.read()
+    reports: Set[str] = set(json.loads(data))
+
 # ---------- Class helpers ---------- #
 
-def get_raw_guilds() -> List[Dict]:
-    """ Get guilds in which the bot exists. """
-    url: str = "https://discordapp.com/api/v6/users/@me/guilds"
-    headers: Dict = {"Authorization": f"Bot {token}"}
-    response: requests.Response = requests.get(url, headers=headers)
-    raw_guilds: List[Dict] = json.loads(response.content)
-
-    return raw_guilds
+bot_id: int = 647954736959717416
+client: discord.Client = discord.Client()
 
 def format_code_block(text: str) -> str:
     """ Format text to multiline code block. """
     return f"```\n{text}\n```"
-
-def create_amputated_role() -> None:
-    """ Create role 'Amputated' if it doesn't exist on each guild the bot is in. """
-    pass
 
 # ---------- Classes ---------- #
 
@@ -84,10 +79,13 @@ class Command:
         return self.name
 
 class RestrictEvent(ABC):
-    """ Base class for restriction event management. """
-    raw_guilds: List[Dict] = get_raw_guilds()
-    guild_ids: List[int] = [int(raw_guild["id"]) for raw_guild in raw_guilds]
-    events: Dict[int, Dict[int, RestrictEvent]] = {guild_id: {} for guild_id in guild_ids}
+    """ Base class for member restriction event management. """
+    events: Dict[int, Dict[int, RestrictEvent]] = None
+
+    def __init__(self, member: discord.Member, seconds: int):
+        self.member: discord.Member = member
+        self.seconds: int = seconds
+        self.start_time: float = loop.time()
 
     @property
     def name_present(self):
@@ -105,10 +103,15 @@ class RestrictEvent(ABC):
     def kwarg_key(self):
         raise NotImplementedError("RestrictEvent.kwarg_key not implemented")
 
-    def __init__(self, member: discord.Member, seconds: int):
-        self.member: discord.Member = member
-        self.seconds: int = seconds
-        self.start_time: float = loop.time()
+    @abstractmethod
+    def get_kwarg_enable(self) -> Dict[str, Any]:
+        """ Enable restriction and return required enable kwarg. """
+        raise NotImplementedError("RestrictEvent.enable not implemented")
+
+    @abstractmethod
+    def get_kwarg_disable(self) -> Dict[str, Any]:
+        """ Disable restriction and return required disable kwarg. """
+        raise NotImplementedError("RestrictEvent.disable not implemented")
 
     def get_remaining_seconds(self) -> int:
         """ Calculate amount of remaining seconds to end mute. """
@@ -169,9 +172,9 @@ class RestrictEvent(ABC):
         if len(events) == 0:
             return f"There are no {cls.name_past} users"
 
-        member_message = "member" if len(events) == 1 else "members"
+        member_pluralized: str = "member" if len(events) == 1 else "members"
 
-        header: str = f"{len(events)} {cls.name_past} {member_message}:\n\n"
+        header: str = f"{len(events)} {cls.name_past} {member_pluralized}\n\n"
         name_lengths: Set[int] = {len(event.member.name) for event in events}
         highest_name_length: int = max(name_lengths)
         
@@ -183,19 +186,9 @@ class RestrictEvent(ABC):
 
         return format_code_block(header + formatted_events)
 
-    @abstractmethod
-    def get_kwarg_enable(self) -> Dict[str, Any]:
-        """ Enable restriction and return required enable kwarg. """
-        raise NotImplementedError("RestrictEvent.enable not implemented")
-
-    @abstractmethod
-    def get_kwarg_disable(self) -> Dict[str, Any]:
-        """ Disable restriction and return required disable kwarg. """
-        raise NotImplementedError("RestrictEvent.disable not implemented")
-
 class AmputateEvent(RestrictEvent):
     """ Amputate event on progress. """
-    events: Dict[int, Dict[int, AmputateEvent]] = RestrictEvent.events.copy()
+    events: Dict[int, Dict[int, RestrictEvent]] = None
 
     name_present: str = "amputate"
     name_past: str = "amputated"
@@ -218,7 +211,7 @@ class AmputateEvent(RestrictEvent):
 
 class DeafEvent(RestrictEvent):
     """ Deaf event on progress. """
-    events: Dict[int, Dict[int, DeafEvent]] = RestrictEvent.events.copy()
+    events: Dict[int, Dict[int, RestrictEvent]] = None
 
     name_present: str = "deaf"
     name_past: str = "deafened"
@@ -239,7 +232,7 @@ class DeafEvent(RestrictEvent):
 
 class MuteEvent(RestrictEvent):
     """ Mute event on progress. """
-    events: Dict[int, Dict[int, MuteEvent]] = RestrictEvent.events.copy()
+    events: Dict[int, Dict[int, RestrictEvent]] = None
 
     name_present: str = "mute"
     name_past: str = "muted"
@@ -279,7 +272,7 @@ def get_random_pediu() -> str:
 def request_image_srcs(query_param: str, max_page: int = 1) -> List[str]:
     """ Return image srcs found until a given page from query service. """
     base_url: str = "http://results.dogpile.com"
-    headers: Dict = {
+    headers: Dict[str, str] = {
         "Accept": "text/html", 
         "User-Agent": "Chrome"
     }
@@ -475,7 +468,7 @@ async def process_message(message: discord.Message) -> str:
         # Handle input
         parameters: List[str] = re.findall("\S+", message.content)
         command: str = parameters[0]
-        is_command_help: bool = command == f"{prefix}help"
+        is_help: bool = re.search(f"^{prefix}help", message.content) != None
         command_exists: bool = command in commands_map
 
         # Reply highlight
@@ -483,7 +476,7 @@ async def process_message(message: discord.Message) -> str:
             reply: str = suggest_help()
 
         # Reply to help
-        elif is_command_help:
+        elif is_help:
             reply: str = get_help(parameters)
 
         # Run command
@@ -493,7 +486,7 @@ async def process_message(message: discord.Message) -> str:
 
     return reply
 
-def validate_spam(text: str) -> bool:
+def check_spam(text: str) -> bool:
     """ Inform if text received is spam. """
 
     # Require minimum amount of distinct chars
@@ -533,7 +526,7 @@ def validate_spam(text: str) -> bool:
 
     return False
 
-# ---------- Commands ---------- #
+# ---------- Interface ---------- #
 
 def suggest_help() -> str:
     """ Simple introduction to be performed when bot is highlighted. """
@@ -568,7 +561,7 @@ def get_help(parameters: List[str]) -> str:
             return "Invalid command was given"
 
 async def report(message: discord.Message, parameters: List[str]) -> str:
-    """ Report a bug. """
+    """ Send a message to be read later. """
     length = len(parameters)
     min_required_length = 2
 
@@ -580,26 +573,31 @@ async def report(message: discord.Message, parameters: List[str]) -> str:
     report_message_index = report_message_match.end()
     report_message = content[report_message_index :]
 
-    is_spam: bool = validate_spam(report_message)
+    is_duplicate: bool = report_message in reports
+    is_spam: bool = check_spam(report_message)
 
+    if is_duplicate:
+        return "This message was already sent"
     if is_spam:
         return "Your message was detected as spam and got filtered"
 
-    with open(report_path, "a") as file:
-        file.write(f"- {report_message}\n\n")
+    reports.add(report_message)
+    with open(report_path, "w") as file:
+        reports_json = json.dumps(list(reports), indent=4)
+        file.write(reports_json)
     return "Thank you for helping!"
 
-async def amputate(message: discord.Message, parameters: List[str]) -> str:
-    """ Amputate someone for given number of seconds. """
-    return await restrict(message, parameters, AmputateEvent)
+# async def amputate(message: discord.Message, parameters: List[str]) -> str:
+#     """ Amputate someone for given number of seconds. """
+#     return await restrict(message, parameters, AmputateEvent)
 
-async def unamputate(message: discord.Message, parameters: List[str]) -> str:
-    """ Unamputate a amputated member. """
-    return await unrestrict(message, parameters, AmputateEvent)
+# async def unamputate(message: discord.Message, parameters: List[str]) -> str:
+#     """ Unamputate a amputated member. """
+#     return await unrestrict(message, parameters, AmputateEvent)
 
-async def amputatelist(message: discord.Message, parameters: List[str]) -> str:
-    """ Get list of currently amputated members on requested guild. """
-    return await restrictionlist(message, parameters, AmputateEvent)
+# async def amputatelist(message: discord.Message, parameters: List[str]) -> str:
+#     """ Get list of currently amputated members on requested guild. """
+#     return await restrictionlist(message, parameters, AmputateEvent)
 
 async def deaf(message: discord.Message, parameters: List[str]) -> str:
     """ Deafen someone for given number of seconds. """
@@ -635,7 +633,7 @@ async def serverlist(message: discord.Message, parameters: List[str]) -> str:
         return "Too many parameters"
 
     guilds: List[discord.Guild] = sorted(client.guilds, key=lambda guild: guild.name)
-    header: str = f"{len(guilds)} servers found:\n\n"
+    header: str = f"{len(guilds)} servers found\n\n"
 
     name_lengths: Set[int] = {len(guild.name) for guild in guilds}
     highest_name_length: int = max(name_lengths)
@@ -662,9 +660,6 @@ async def tpose(message: discord.Message, parameters: List[str]) -> str:
 
 # ---------- Application variables ---------- #
 
-bot_id: int = 647954736959717416
-client: discord.Client = discord.Client()
-
 # Async scheduler
 loop: asyncio.ProactorEventLoop = asyncio.get_event_loop()
 
@@ -682,16 +677,16 @@ commands: Dict[str, Command] = {
                     "Send a message to developer (report a bug, request a feature, etc)", 
                     (f"Report a permission related bug" + 
                     f"\n{prefix}report administrators are not having permission to mute")),
-    "amputate": Command(f"{prefix}amputate",
-                    ("Amputate user for a given number of seconds, creates role 'amputated'," +
-                     "amputated users cannot send messages in text channels"), 
-                    f"Amputate Fred for 30 seconds\n{prefix}amputate @Fred 30"),
-    "unamputate": Command(f"{prefix}unamputate",
-                    "Unamputate a amputated user", 
-                    f"Unamputate Fred\n{prefix}unamputate @Fred"),
-    "amputatelist": Command(f"{prefix}amputatelist",
-                     "Get list of currently amputated users in this server",
-                     f"\n{prefix}amputatelist"),
+    # "amputate": Command(f"{prefix}amputate",
+    #                 ("Amputate user for a given number of seconds, creates role 'amputated'," +
+    #                  "amputated users cannot send messages in text channels"), 
+    #                 f"Amputate Fred for 30 seconds\n{prefix}amputate @Fred 30"),
+    # "unamputate": Command(f"{prefix}unamputate",
+    #                 "Unamputate a amputated user", 
+    #                 f"Unamputate Fred\n{prefix}unamputate @Fred"),
+    # "amputatelist": Command(f"{prefix}amputatelist",
+    #                  "Get list of currently amputated users in this server",
+    #                  f"\n{prefix}amputatelist"),
     "mute": Command(f"{prefix}mute",
                     "Mute user for a given number of seconds", 
                     f"Mute Fred for 30 seconds\n{prefix}mute @Fred 30"),
@@ -722,9 +717,9 @@ commands: Dict[str, Command] = {
 commands_map: Dict[str, Callable] = {
     f"{prefix}help": get_help,
     f"{prefix}report": report,
-    f"{prefix}amputate": amputate,
-    f"{prefix}unamputate": unamputate,
-    f"{prefix}amputatelist": amputatelist,
+    # f"{prefix}amputate": amputate,
+    # f"{prefix}unamputate": unamputate,
+    # f"{prefix}amputatelist": amputatelist,
     f"{prefix}deaf": deaf,
     f"{prefix}undeaf": undeaf,
     f"{prefix}deaflist": deaflist,
@@ -735,12 +730,21 @@ commands_map: Dict[str, Callable] = {
     f"{prefix}tpose": tpose
 }
 
-event_classes: Set[ClassVar[Restriction]] = {AmputateEvent, DeafEvent, MuteEvent}
+event_classes: Set[ClassVar[Restriction]] = {DeafEvent, MuteEvent}
 voice_restrictions: Set[str] = {"deaf", "mute"}
 
 # ---------- Event listeners ---------- #
 
-# Bot start
+# Bot connected
+@client.event
+async def on_connect():
+    # Initialize data that requires connection
+    RestrictEvent.events = {guild.id: {} for guild in client.guilds}
+
+    for subclass in RestrictEvent.__subclasses__():
+        subclass.events = copy.deepcopy(RestrictEvent.events)
+
+# Bot ready
 @client.event
 async def on_ready():
     print(f"{client.user} awoke")
@@ -772,9 +776,6 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if was_undeafen:
         if DeafEvent.verify_event(guild_id, member.id):
             DeafEvent.remove_event(guild_id, member.id)
-    print("DeafEvent.get_events(guild_id): ", DeafEvent.get_events(guild_id))
-    print("MuteEvent.get_events(guild_id): ", MuteEvent.get_events(guild_id))
-    # Implement metaclass
 
 # Bot join guild
 @client.event

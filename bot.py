@@ -53,7 +53,8 @@ with open(report_path) as file:
 # ---------- Class helpers ---------- #
 
 bot_id: int = 647954736959717416
-client: discord.Client = discord.Client()
+game: discord.Game = discord.Game("Despacito 2")
+client: discord.Client = discord.Client(activity=game)
 
 def format_code_block(text: str) -> str:
     """ Format text to multiline code block. """
@@ -87,6 +88,12 @@ class RestrictEvent(ABC):
         self.seconds: int = seconds
         self.start_time: float = loop.time()
 
+    def get_remaining_seconds(self) -> int:
+        """ Calculate amount of remaining seconds to end mute. """
+        seconds_passed: int = int(loop.time() - self.start_time)
+        remaining_seconds: int = self.seconds - seconds_passed
+        return remaining_seconds
+
     @property
     def name_present(self):
         raise NotImplementedError("RestrictEvent.name_present not implemented")
@@ -112,12 +119,6 @@ class RestrictEvent(ABC):
     def get_kwarg_disable(self) -> Dict[str, Any]:
         """ Disable restriction and return required disable kwarg. """
         raise NotImplementedError("RestrictEvent.disable not implemented")
-
-    def get_remaining_seconds(self) -> int:
-        """ Calculate amount of remaining seconds to end mute. """
-        seconds_passed: int = int(loop.time() - self.start_time)
-        remaining_seconds: int = self.seconds - seconds_passed
-        return remaining_seconds
 
     @classmethod
     def add_guild(cls, guild_id: int) -> None:
@@ -192,7 +193,7 @@ class AmputateEvent(RestrictEvent):
 
     name_present: str = "amputate"
     name_past: str = "amputated"
-    function_role: Callable = lambda role: role.permissions.manage_messages
+    function_role: Callable = lambda role: role.permissions.send_messages
     kwarg_key: str = "roles"
 
     def __init__(self, guild: discord.Guild, member: discord.Member, seconds: int):
@@ -254,10 +255,11 @@ class MuteEvent(RestrictEvent):
 # ---------- Internal functions ---------- #
 
 def extract_id(s: str) -> int:
-    """ Extract id from given string. """
-    return int(re.search("\d+", s)[0])
+    """ Extract id from given string, return -1 if pattern is invalid. """
+    match = re.search("\d+", s)
+    return int(match[0]) if match != None else -1
 
-def get_random_pediu() -> str:
+def get_pediu() -> str:
     """ Get string "pediu" with randomized changes. """
     s: str = "pediu"
 
@@ -331,6 +333,11 @@ async def restrict(message: discord.Message,
     member_id: int = extract_id(member_name)
     seconds_str: str = parameters[2]
 
+    # Validate member highlight
+    is_highlight = member_id != -1
+    if not is_highlight:
+        return "Target user must be highlighted"
+
     # Validate author permissions
     function_role: Callable = restrict_event_class.function_role
 
@@ -341,15 +348,11 @@ async def restrict(message: discord.Message,
     has_permission: bool = role_has_permission or is_admin or is_owner
 
     if not has_permission:
-        return f"User '{message.author.name}' doesn't have permission to {restrict_event_class.name_present}"
+        return f"User '{message.author.mention}' doesn't have permission to {restrict_event_class.name_present}"
 
-    # Validate member
+    # Get member
     members: List[discord.Member] = [member for member in message.guild.members]
     member: Member = next((member for member in members if member.id == member_id), None)
-    is_member_valid: bool = member != None
-
-    if not is_member_valid:
-        return f"User '{member_name}' not found on this server"
 
     # Validate seconds
     try:
@@ -369,7 +372,7 @@ async def restrict(message: discord.Message,
 
     # Restrict and sleep
     restrict_event: RestrictEvent = restrict_event_class(message.guild, member, seconds)
-    reply: str = f"User {member.name} is {restrict_event_class.name_past} for {seconds} seconds"
+    reply: str = f"User {member.mention} is {restrict_event_class.name_past} for {seconds} seconds"
 
     try:
         kwarg_enable: Dict[str, Any] = restrict_event.get_kwarg_enable()
@@ -379,6 +382,9 @@ async def restrict(message: discord.Message,
     except discord.errors.HTTPException as e:
         if restrict_event_class.name_present in voice_restrictions:
             return "User is not in voice chat"
+        else:
+            return (f"User {message.author.mention} doesn't have permission to " +
+                    f"{restrict_event_class.name_present} user {member.mention}")
 
     # Unrestrict if still restricted
     guild_id: int = message.guild.id
@@ -386,6 +392,10 @@ async def restrict(message: discord.Message,
     if is_restricted:
         kwarg_disable: Dict[str, Any] = restrict_event.get_kwarg_disable()
         await member.edit(**kwarg_disable)
+
+        event_exists = restrict_event_class.verify_event(guild_id, member.id)
+        if event_exists:
+            restrict_event_class.remove_event(guild_id, member.id)
 
 async def unrestrict(message: discord.Message, 
                      parameters: List[str], 
@@ -403,6 +413,11 @@ async def unrestrict(message: discord.Message,
     member_name: str = parameters[1]
     member_id: int = extract_id(member_name)
 
+    # Validate member highlight
+    is_highlight = member_id != -1
+    if not is_highlight:
+        return "Target user must be highlighted"
+
     # Validate author permissions
     function_role: Callable = restrict_event_class.function_role
 
@@ -415,13 +430,9 @@ async def unrestrict(message: discord.Message,
     if not has_permission:
         return f"User '{message.author.name}' doesn't have permission to {restrict_event_class.name_present}"
 
-    # Validate member
+    # Get member
     members: List[discord.Member] = [member for member in message.guild.members]
     member: Member = next((member for member in members if member.id == member_id), None)
-    is_member_valid: bool = member != None
-
-    if not is_member_valid:
-        return f"User '{member_name}' not found on this server"
 
     # Unrestrict if still restricted
     guild_id: int = message.guild.id
@@ -431,7 +442,7 @@ async def unrestrict(message: discord.Message,
         kwarg_disable: Dict[str, Any] = restrict_event.get_kwarg_disable()
         await member.edit(**kwarg_disable)
     else:
-        return f"User {member_name} is not time-{restrict_event_class.name_past}"
+        return f"User {member.mention} is not time-{restrict_event_class.name_past}"
 
 async def restrictionlist(message: discord.Message, 
                           parameters: List[str], 
@@ -459,8 +470,11 @@ async def process_message(message: discord.Message) -> str:
         replaced_content, bad_word_amount = replace_bad_words(message.content)
 
         # Handle special messages
-        if message.content.lower().startswith("quem"):
-            return get_random_pediu()
+        content_lower = message.content.lower()
+        key = next((key for key in special_messages if content_lower.startswith(key)), None)
+        is_special = key != None
+        if is_special:
+            return special_messages[key]()
 
         # Verify if message is just bot highlight
         bot_was_highlighted: bool = re.search(f"^<@\!?{bot_id}>$", message.content) != None
@@ -587,17 +601,17 @@ async def report(message: discord.Message, parameters: List[str]) -> str:
         file.write(reports_json)
     return "Thank you for helping!"
 
-# async def amputate(message: discord.Message, parameters: List[str]) -> str:
-#     """ Amputate someone for given number of seconds. """
-#     return await restrict(message, parameters, AmputateEvent)
+async def amputate(message: discord.Message, parameters: List[str]) -> str:
+    """ Amputate someone for given number of seconds. """
+    return await restrict(message, parameters, AmputateEvent)
 
-# async def unamputate(message: discord.Message, parameters: List[str]) -> str:
-#     """ Unamputate a amputated member. """
-#     return await unrestrict(message, parameters, AmputateEvent)
+async def unamputate(message: discord.Message, parameters: List[str]) -> str:
+    """ Unamputate a amputated member. """
+    return await unrestrict(message, parameters, AmputateEvent)
 
-# async def amputatelist(message: discord.Message, parameters: List[str]) -> str:
-#     """ Get list of currently amputated members on requested guild. """
-#     return await restrictionlist(message, parameters, AmputateEvent)
+async def amputatelist(message: discord.Message, parameters: List[str]) -> str:
+    """ Get list of currently amputated members on requested guild. """
+    return await restrictionlist(message, parameters, AmputateEvent)
 
 async def deaf(message: discord.Message, parameters: List[str]) -> str:
     """ Deafen someone for given number of seconds. """
@@ -677,16 +691,16 @@ commands: Dict[str, Command] = {
                     "Send a message to developer (report a bug, request a feature, etc)", 
                     (f"Report a permission related bug" + 
                     f"\n{prefix}report administrators are not having permission to mute")),
-    # "amputate": Command(f"{prefix}amputate",
-    #                 ("Amputate user for a given number of seconds, creates role 'amputated'," +
-    #                  "amputated users cannot send messages in text channels"), 
-    #                 f"Amputate Fred for 30 seconds\n{prefix}amputate @Fred 30"),
-    # "unamputate": Command(f"{prefix}unamputate",
-    #                 "Unamputate a amputated user", 
-    #                 f"Unamputate Fred\n{prefix}unamputate @Fred"),
-    # "amputatelist": Command(f"{prefix}amputatelist",
-    #                  "Get list of currently amputated users in this server",
-    #                  f"\n{prefix}amputatelist"),
+    "amputate": Command(f"{prefix}amputate",
+                    ("Amputate user for a given number of seconds, removing all attached roles, " +
+                     "event is aborted if target member roles are updated while it runs"), 
+                    f"Amputate Fred for 30 seconds\n{prefix}amputate @Fred 30"),
+    "unamputate": Command(f"{prefix}unamputate",
+                    "Unamputate a amputated user", 
+                    f"Unamputate Fred\n{prefix}unamputate @Fred"),
+    "amputatelist": Command(f"{prefix}amputatelist",
+                     "Get list of currently amputated users in this server",
+                     f"\n{prefix}amputatelist"),
     "mute": Command(f"{prefix}mute",
                     "Mute user for a given number of seconds", 
                     f"Mute Fred for 30 seconds\n{prefix}mute @Fred 30"),
@@ -713,13 +727,19 @@ commands: Dict[str, Command] = {
                      f"\n{prefix}tpose")
 }
 
-# Map string to function
+special_messages: Dict[str, Callable] = {
+    "quem": get_pediu,
+    "ninguem": lambda: "pediu",
+    "ok": lambda: "boomer",
+    "comedores de": lambda: "coco"
+}
+
 commands_map: Dict[str, Callable] = {
     f"{prefix}help": get_help,
     f"{prefix}report": report,
-    # f"{prefix}amputate": amputate,
-    # f"{prefix}unamputate": unamputate,
-    # f"{prefix}amputatelist": amputatelist,
+    f"{prefix}amputate": amputate,
+    f"{prefix}unamputate": unamputate,
+    f"{prefix}amputatelist": amputatelist,
     f"{prefix}deaf": deaf,
     f"{prefix}undeaf": undeaf,
     f"{prefix}deaflist": deaflist,
@@ -757,7 +777,7 @@ async def on_message(message: discord.Message):
         if reply != None:
             await message.channel.send(reply)
     except UnicodeEncodeError:
-        pass
+        seconds_passed
 
 # Join, leave, mute, deafen on VC
 @client.event
@@ -776,6 +796,19 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if was_undeafen:
         if DeafEvent.verify_event(guild_id, member.id):
             DeafEvent.remove_event(guild_id, member.id)
+
+# User updated status, activity, nickname or roles
+@client.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    were_roles_changed = not before.roles is after.roles
+    
+    if were_roles_changed:
+        is_amputated = AmputateEvent.verify_event(after.guild.id, after.id)
+        if is_amputated:
+            amputate_event = AmputateEvent.get_event(after.guild.id, after.id)
+            happened_recently = amputate_event.get_recent_state()
+            if not happened_recently:
+                AmputateEvent.remove_event(after.guild.id, after.id)
 
 # Bot join guild
 @client.event

@@ -56,14 +56,17 @@ bot_id: int = 647954736959717416
 game: discord.Game = discord.Game("Despacito 2")
 client: discord.Client = discord.Client(activity=game)
 
+
 def format_code_block(text: str) -> str:
     """ Format text to multiline code block. """
     return f"```\n{text}\n```"
+
 
 # ---------- Classes ---------- #
 
 class Command:
     """ Describe a command available from bot. """
+
     def __init__(self, name: str, description: str, example: str):
         self.name = name
         self.description = description
@@ -79,6 +82,7 @@ class Command:
     def __repr__(self):
         return self.name
 
+
 class RestrictEvent(ABC):
     """ Base class for member restriction event management. """
     events: Dict[int, Dict[int, RestrictEvent]] = None
@@ -93,6 +97,10 @@ class RestrictEvent(ABC):
         seconds_passed: int = int(loop.time() - self.start_time)
         remaining_seconds: int = self.seconds - seconds_passed
         return remaining_seconds
+
+    def get_recent_state(self) -> bool:
+        """ Inform if event just happened. """
+        return loop.time() - self.start_time < 0.5
 
     @property
     def name_present(self):
@@ -136,7 +144,7 @@ class RestrictEvent(ABC):
         return guild_id in cls.events
 
     @classmethod
-    def get_guild(cls, guild_id: int) -> discord.Guild:
+    def get_guild(cls, guild_id: int) -> Dict[int, RestrictEvent]:
         """ Get guild from event dict. """
         return cls.events[guild_id]
 
@@ -157,35 +165,36 @@ class RestrictEvent(ABC):
 
     @classmethod
     def get_event(cls, guild_id: int, event_id: int) -> RestrictEvent:
-        """ Verify if event guild dict has member by id. """
+        """ Get event from event guild dict. """
         return cls.events[guild_id][event_id]
-
-    @classmethod
-    def get_events(cls, guild_id: int) -> Iterator[RestrictEvent]:
-        """ Get list of events in a given guild. """
-        return cls.events[guild_id].values()
 
     @classmethod
     def get_formatted_list(cls, guild_id: int) -> str:
         """ Get formatted list of running mute events in a guild. """
-        events: List[RestrictEvent] = sorted(cls.get_events(guild_id), 
+        events: List[RestrictEvent] = sorted(cls.get_events(guild_id),
                                              key=lambda event: event.member.name)
         if len(events) == 0:
             return f"There are no {cls.name_past} users"
 
-        member_pluralized: str = "member" if len(events) == 1 else "members"
+        member_pluralized: str = pluralize(len(events), "member", "members")
 
         header: str = f"{len(events)} {cls.name_past} {member_pluralized}\n\n"
         name_lengths: Set[int] = {len(event.member.name) for event in events}
         highest_name_length: int = max(name_lengths)
-        
-        events_data: str = [(f"{event.member.name.ljust(highest_name_length)}: " + 
-                             f"{event.get_remaining_seconds()} seconds") 
-                             for event in events]
+
+        events_data: List[str] = [(f"{event.member.name.ljust(highest_name_length)}: " +
+                                   f"{event.get_remaining_seconds()} seconds")
+                                  for event in events]
 
         formatted_events: str = "\n".join(events_data)
 
         return format_code_block(header + formatted_events)
+
+    @classmethod
+    def get_events(cls, guild_id: int) -> ValuesView[RestrictEvent]:
+        """ Get list of events in a given guild. """
+        return cls.events[guild_id].values()
+
 
 class AmputateEvent(RestrictEvent):
     """ Amputate event on progress. """
@@ -210,6 +219,7 @@ class AmputateEvent(RestrictEvent):
         """ Disable restriction and return required disable kwarg. """
         return {self.kwarg_key: self.previous_roles}
 
+
 class DeafEvent(RestrictEvent):
     """ Deaf event on progress. """
     events: Dict[int, Dict[int, RestrictEvent]] = None
@@ -230,6 +240,7 @@ class DeafEvent(RestrictEvent):
     def get_kwarg_disable(self) -> Dict[str, bool]:
         """ Disable restriction and return required disable kwarg. """
         return {self.kwarg_key: False}
+
 
 class MuteEvent(RestrictEvent):
     """ Mute event on progress. """
@@ -252,12 +263,111 @@ class MuteEvent(RestrictEvent):
         """ Disable restriction and return required disable kwarg. """
         return {self.kwarg_key: False}
 
+
+class Video:
+    """ Represent a video to be played. """
+    queues: Dict[int, List[Video]] = {}
+
+    def __init__(self, src: str, guild: discord.Guild):
+        self.src: str = src
+        Video.add_video(guild.id, self)
+
+    @classmethod
+    def add_queue(cls, guild_id: int) -> None:
+        """ Add guild to queue dict. """
+        cls.queues[guild_id] = []
+
+    @classmethod
+    def remove_queue(cls, guild_id: int) -> None:
+        """ Remove guild from queue dict. """
+        del cls.queues[guild_id]
+
+    @classmethod
+    def verify_queue(cls, guild_id: int) -> bool:
+        """ Verify if queue dict has guild by id. """
+        return guild_id in cls.queues
+
+    @classmethod
+    def get_queue(cls, guild_id: int) -> List[Video]:
+        """ Get queue from guild dict. """
+        return cls.queues[guild_id]
+
+    @classmethod
+    def clear_queue(cls, guild_id: int) -> None:
+        """ Clear queue for a guild. """
+        cls.queues[guild_id] = []
+
+    @classmethod
+    def add_video(cls, guild_id: int, video: Video) -> None:
+        """ Add video to video list. """
+        cls.queues[guild_id].append(video)
+
+    @classmethod
+    def remove_video(cls, guild_id: int, video_id: int) -> None:
+        """ Remove video from video list. """
+        video_index: int = video_id - 1
+        del cls.queues[guild_id][video_index]
+
+    @classmethod
+    def verify_video(cls, guild_id: int) -> bool:
+        """ Verify if queue dict has video by id. """
+        return guild_id in cls.queues
+
+    @classmethod
+    def get_videos(cls, guild_id: int) -> List[Video]:
+        """ Get videos from guild queue. """
+        return cls.queues[guild_id]
+
+    @classmethod
+    def get_formatted_list(cls, guild_id: int) -> str:
+        """ Get formatted list of videos in guild queue. """
+        videos: List[Video] = cls.get_videos(guild_id)
+        if len(videos) == 0:
+            return f"There are no videos in queue"
+
+        member_pluralized: str = pluralize(len(videos), "video", "videos")
+
+        header: str = f"{len(videos)} {member_pluralized}\n\n"
+
+        highest_id_length: int = len(str(len(videos) + 1))
+
+        name_lengths: Set[int] = {len(video.name) for video in videos}
+        highest_name_length: int = max(name_lengths)
+
+        events_data: List[str] = [(f"{str(i + 1).ljust(highest_id_length)}: " +
+                                   f"{video.name.ljust(highest_name_length)}")
+                                  for i, video in enumerate(videos)]
+
+        formatted_events: str = "\n".join(events_data)
+
+        return format_code_block(header + formatted_events)
+
+
 # ---------- Internal functions ---------- #
+
+def pluralize(value: int, singular: str, plural: str) -> str:
+    """ Decide between singular or plural version of a message. """
+    return singular if value <= 1 else plural
+
 
 def extract_id(s: str) -> int:
     """ Extract id from given string, return -1 if pattern is invalid. """
-    match = re.search("\d+", s)
-    return int(match[0]) if match != None else -1
+    match: re.Match = re.search("\d+", s)
+    return int(match[0]) if match is not None else -1
+
+
+def validate_seconds(seconds_str: str) -> bool:
+    """ Inform if seconds is a number inside given boundaries. """
+    try:
+        is_seconds_number: bool = re.search("\D", seconds_str) is None
+        seconds: int = int(seconds_str)
+        is_seconds_on_bounds: bool = (min_seconds_amount <= seconds <= max_seconds_amount)
+        is_seconds_valid: bool = is_seconds_number and is_seconds_on_bounds
+    except ValueError:
+        is_seconds_valid: bool = False
+
+    return is_seconds_valid
+
 
 def get_pediu() -> str:
     """ Get string "pediu" with randomized changes. """
@@ -265,17 +375,18 @@ def get_pediu() -> str:
 
     text: str = "".join([random.choice([char.lower(), char.upper()]) for char in s])
     spaces: str = " " * random.randint(1, 3)
-    laughs: str = "".join("k" if random.random() < 0.7 else "j" for i in range(random.randint(0, 4)))
+    laughs: str = "".join("k" if random.random() < 0.7 else "j" for _ in range(random.randint(0, 4)))
     exclamations: str = "?" * random.randint(0, 3)
     result: str = text + spaces + laughs + exclamations
 
     return result
 
+
 def request_image_srcs(query_param: str, max_page: int = 1) -> List[str]:
     """ Return image srcs found until a given page from query service. """
     base_url: str = "http://results.dogpile.com"
     headers: Dict[str, str] = {
-        "Accept": "text/html", 
+        "Accept": "text/html",
         "User-Agent": "Chrome"
     }
 
@@ -292,6 +403,7 @@ def request_image_srcs(query_param: str, max_page: int = 1) -> List[str]:
 
     return srcs
 
+
 def request_tpose_srcs(max_page: int = 1) -> List[str]:
     """ Request tpose image srcs. """
     srcs: List[str] = request_image_srcs("tpose", max_page)
@@ -299,14 +411,15 @@ def request_tpose_srcs(max_page: int = 1) -> List[str]:
 
     return srcs
 
+
 def replace_bad_words(s: str) -> Tuple[str, int]:
     """ Replace bad words in a message. Return filtered message and amount of filtered words. """
     words: List[str] = re.findall("\S+", s) or []
 
-    bad_words: Set[str] = {word for word in words 
-                           if any(re.search(f"\\b{bad_word_regex}\\b", word.lower()) != None 
-                           for bad_word_regex in bad_word_regexes)}
-    
+    bad_words: Set[str] = {word for word in words
+                           if any(re.search(f"\\b{bad_word_regex}\\b", word.lower()) is not None
+                                  for bad_word_regex in bad_word_regexes)}
+
     for bad_word in bad_words:
         s = s.replace(bad_word, "#" * len(bad_word))
 
@@ -314,8 +427,9 @@ def replace_bad_words(s: str) -> Tuple[str, int]:
 
     return s, bad_word_amount
 
-async def restrict(message: discord.Message, 
-                   parameters: List[str], 
+
+async def restrict(message: discord.Message,
+                   parameters: List[str],
                    restrict_event_class: ClassVar[RestrictEvent]) -> str:
     """ Restrict someone for given number of seconds. """
     length: int = len(parameters)
@@ -328,13 +442,13 @@ async def restrict(message: discord.Message,
         return "No 'seconds' parameter was given"
     if length > required_length:
         return "Too many parameters"
-    
+
     member_name: str = parameters[1]
     member_id: int = extract_id(member_name)
     seconds_str: str = parameters[2]
 
     # Validate member highlight
-    is_highlight = member_id != -1
+    is_highlight: bool = member_id != -1
     if not is_highlight:
         return "Target user must be highlighted"
 
@@ -352,23 +466,15 @@ async def restrict(message: discord.Message,
 
     # Get member
     members: List[discord.Member] = [member for member in message.guild.members]
-    member: Member = next((member for member in members if member.id == member_id), None)
+    member: discord.Member = next((member for member in members if member.id == member_id), None)
 
     # Validate seconds
-    try:
-        is_seconds_number: bool = re.search("\D", seconds_str) == None
-        seconds: int = int(seconds_str)
-        min_seconds_amount: int = 1
-        max_seconds_amount: int = 7200
-        is_seconds_on_bounds: bool = (seconds >= min_seconds_amount and 
-                                      seconds <= max_seconds_amount)
-        is_seconds_valid: bool = is_seconds_number and is_seconds_on_bounds
-    except ValueError:
-        is_seconds_valid: bool = False
+    is_seconds_valid: bool = validate_seconds(seconds_str)
 
     if not is_seconds_valid:
         return ("Invalid amount of seconds, it has to be an integer " +
                 f"between {min_seconds_amount} and {max_seconds_amount}")
+    seconds: int = int(seconds_str)
 
     # Restrict and sleep
     restrict_event: RestrictEvent = restrict_event_class(message.guild, member, seconds)
@@ -381,7 +487,7 @@ async def restrict(message: discord.Message,
         await asyncio.sleep(seconds)
     except discord.errors.HTTPException as e:
         if restrict_event_class.name_present in voice_restrictions:
-            return "User is not in voice chat"
+            return "Target user is not in voice chat"
         else:
             return (f"User {message.author.mention} doesn't have permission to " +
                     f"{restrict_event_class.name_present} user {member.mention}")
@@ -393,12 +499,13 @@ async def restrict(message: discord.Message,
         kwarg_disable: Dict[str, Any] = restrict_event.get_kwarg_disable()
         await member.edit(**kwarg_disable)
 
-        event_exists = restrict_event_class.verify_event(guild_id, member.id)
+        event_exists: bool = restrict_event_class.verify_event(guild_id, member.id)
         if event_exists:
             restrict_event_class.remove_event(guild_id, member.id)
 
-async def unrestrict(message: discord.Message, 
-                     parameters: List[str], 
+
+async def unrestrict(message: discord.Message,
+                     parameters: List[str],
                      restrict_event_class: ClassVar[RestrictEvent]) -> str:
     """ Unrestrict a restricted member. """
     length: int = len(parameters)
@@ -414,7 +521,7 @@ async def unrestrict(message: discord.Message,
     member_id: int = extract_id(member_name)
 
     # Validate member highlight
-    is_highlight = member_id != -1
+    is_highlight: bool = member_id != -1
     if not is_highlight:
         return "Target user must be highlighted"
 
@@ -432,7 +539,7 @@ async def unrestrict(message: discord.Message,
 
     # Get member
     members: List[discord.Member] = [member for member in message.guild.members]
-    member: Member = next((member for member in members if member.id == member_id), None)
+    member: discord.Member = next((member for member in members if member.id == member_id), None)
 
     # Unrestrict if still restricted
     guild_id: int = message.guild.id
@@ -441,11 +548,16 @@ async def unrestrict(message: discord.Message,
         restrict_event: RestrictEvent = restrict_event_class.get_event(guild_id, member.id)
         kwarg_disable: Dict[str, Any] = restrict_event.get_kwarg_disable()
         await member.edit(**kwarg_disable)
+
+        event_exists: bool = restrict_event_class.verify_event(guild_id, member.id)
+        if event_exists:
+            restrict_event_class.remove_event(guild_id, member.id)
     else:
         return f"User {member.mention} is not time-{restrict_event_class.name_past}"
 
-async def restrictionlist(message: discord.Message, 
-                          parameters: List[str], 
+
+async def restrictionlist(message: discord.Message,
+                          parameters: List[str],
                           restrict_event_class: ClassVar[RestrictEvent]) -> str:
     """ Get list of currently restricted members on requested guild. """
     length: int = len(parameters)
@@ -457,6 +569,7 @@ async def restrictionlist(message: discord.Message,
 
     return restrict_event_class.get_formatted_list(message.guild.id)
 
+
 async def process_message(message: discord.Message) -> str:
     """ Handle message reply. """
     reply: str = None
@@ -466,39 +579,56 @@ async def process_message(message: discord.Message) -> str:
     if not sent_by_bot and not is_empty:
 
         print(f"Message received: {message.content}")
-        
+
+        # Check bad words
+        replaced_content: str
+        bad_word_amount: int
         replaced_content, bad_word_amount = replace_bad_words(message.content)
+        has_bad_word: bool = bad_word_amount > 0
+
+        # Filter bad words
+        if has_bad_word:
+            is_guild_synthos: bool = message.guild.id == synthos_id
+            if not is_guild_synthos:
+                await message.delete()
+
+            pluralized: str = pluralize(bad_word_amount, "bad word", "bad words")
+            feedback_message: str = (f"{message.author.mention} typed the following message " +
+                                     f"containing {bad_word_amount} {pluralized}:")
+            await message.channel.send(feedback_message)
+
+            return replaced_content
 
         # Handle special messages
-        content_lower = message.content.lower()
-        key = next((key for key in special_messages if content_lower.startswith(key)), None)
-        is_special = key != None
+        content_lower: str = message.content.lower()
+        key: str = next((key for key in special_messages if content_lower.startswith(key)), None)
+        is_special: bool = key is not None
         if is_special:
-            return special_messages[key]()
+            special_message: str = special_messages[key]()
+            return special_message
 
         # Verify if message is just bot highlight
-        bot_was_highlighted: bool = re.search(f"^<@\!?{bot_id}>$", message.content) != None
+        bot_was_highlighted: bool = re.search(f"^<@!?{bot_id}>$", message.content) is not None
 
         # Handle input
         parameters: List[str] = re.findall("\S+", message.content)
         command: str = parameters[0]
-        is_help: bool = re.search(f"^{prefix}help", message.content) != None
+        is_help: bool = re.search(f"^{prefix}help", message.content) is not None
         command_exists: bool = command in commands_map
 
         # Reply highlight
         if bot_was_highlighted:
-            reply: str = suggest_help()
-
+            reply = suggest_help()
         # Reply to help
         elif is_help:
-            reply: str = get_help(parameters)
-
+            reply = get_help(parameters)
         # Run command
         elif command_exists:
             command_function: Callable = commands_map[command]
-            reply: str = await command_function(message, parameters)
+            reply = await command_function(message, parameters)
 
     return reply
+
 
 def check_spam(text: str) -> bool:
     """ Inform if text received is spam. """
@@ -517,7 +647,7 @@ def check_spam(text: str) -> bool:
         return True
 
     # Attempt to find recurring pattern
-    has_recurring_pattern: bool = any(text[: length] == text[length : length * 2]
+    has_recurring_pattern: bool = any(text[: length] == text[length: length * 2]
                                       for length in range(4, len(text) // 2 + 1))
     if has_recurring_pattern:
         return True
@@ -540,11 +670,13 @@ def check_spam(text: str) -> bool:
 
     return False
 
+
 # ---------- Interface ---------- #
 
 def suggest_help() -> str:
     """ Simple introduction to be performed when bot is highlighted. """
     return f"Type {prefix}help for more info"
+
 
 def get_help(parameters: List[str]) -> str:
     """ Describe all commands briefly or a given command extensively. """
@@ -560,12 +692,12 @@ def get_help(parameters: List[str]) -> str:
     # General help
     if is_general_help:
         header: str = "List of available commands:\n\n"
-        commands_data: str = [command.get_brief_data() for command in commands.values()]
+        commands_data: List[str] = [command.get_brief_data() for command in commands.values()]
         formatted_commands_data: str = "\n".join(commands_data)
         reply: str = header + formatted_commands_data
 
         return reply
-    
+
     # Specific command help
     if is_command_help:
         try:
@@ -574,18 +706,31 @@ def get_help(parameters: List[str]) -> str:
         except KeyError:
             return "Invalid command was given"
 
+
+async def code(message: discord.Message, parameters: List[str]) -> None:
+    """ Provide file with current source code. """
+    length: int = len(parameters)
+    required_length: int = 1
+
+    if length > required_length:
+        return "Too many parameters"
+
+    code_file: discord.File = discord.File("./bot.py")
+    await message.channel.send(file=code_file)
+
+
 async def report(message: discord.Message, parameters: List[str]) -> str:
-    """ Send a message to be read later. """
-    length = len(parameters)
-    min_required_length = 2
+    """ Send a message to be logged. """
+    length: int = len(parameters)
+    min_required_length: int = 2
 
     if length < min_required_length:
         return "No 'message' parameter was given"
 
-    content = message.content
-    report_message_match = re.search(f"{prefix}report\s+", content)
-    report_message_index = report_message_match.end()
-    report_message = content[report_message_index :]
+    content: str = message.content
+    report_message_match: re.Match = re.search(f"{prefix}report\s+", content)
+    report_message_index: int = report_message_match.end()
+    report_message: str = content[report_message_index:]
 
     is_duplicate: bool = report_message in reports
     is_spam: bool = check_spam(report_message)
@@ -597,45 +742,55 @@ async def report(message: discord.Message, parameters: List[str]) -> str:
 
     reports.add(report_message)
     with open(report_path, "w") as file:
-        reports_json = json.dumps(list(reports), indent=4)
+        reports_json: str = json.dumps(list(reports), indent=4)
         file.write(reports_json)
     return "Thank you for helping!"
+
 
 async def amputate(message: discord.Message, parameters: List[str]) -> str:
     """ Amputate someone for given number of seconds. """
     return await restrict(message, parameters, AmputateEvent)
 
+
 async def unamputate(message: discord.Message, parameters: List[str]) -> str:
     """ Unamputate a amputated member. """
     return await unrestrict(message, parameters, AmputateEvent)
+
 
 async def amputatelist(message: discord.Message, parameters: List[str]) -> str:
     """ Get list of currently amputated members on requested guild. """
     return await restrictionlist(message, parameters, AmputateEvent)
 
+
 async def deaf(message: discord.Message, parameters: List[str]) -> str:
     """ Deafen someone for given number of seconds. """
     return await restrict(message, parameters, DeafEvent)
+
 
 async def undeaf(message: discord.Message, parameters: List[str]) -> str:
     """ Undeaf a deafened member. """
     return await unrestrict(message, parameters, DeafEvent)
 
+
 async def deaflist(message: discord.Message, parameters: List[str]) -> str:
     """ Get list of currently deafened members on requested guild. """
     return await restrictionlist(message, parameters, DeafEvent)
+
 
 async def mute(message: discord.Message, parameters: List[str]) -> str:
     """ Mute someone for given number of seconds. """
     return await restrict(message, parameters, MuteEvent)
 
+
 async def unmute(message: discord.Message, parameters: List[str]) -> str:
     """ Unmute a muted member. """
     return await unrestrict(message, parameters, MuteEvent)
 
+
 async def mutelist(message: discord.Message, parameters: List[str]) -> str:
     """ Get list of currently muted members on requested guild. """
     return await restrictionlist(message, parameters, MuteEvent)
+
 
 async def serverlist(message: discord.Message, parameters: List[str]) -> str:
     """ Request list of servers in which TPoseBot is present. """
@@ -652,12 +807,13 @@ async def serverlist(message: discord.Message, parameters: List[str]) -> str:
     name_lengths: Set[int] = {len(guild.name) for guild in guilds}
     highest_name_length: int = max(name_lengths)
 
-    guilds_data: str = [f"{guild.name.ljust(highest_name_length)} | " + 
-                        f"Member count: {len(guild.members)}" 
-                        for guild in guilds]
+    guilds_data: List[str] = [f"{guild.name.ljust(highest_name_length)} | " +
+                              f"Member count: {len(guild.members)}"
+                              for guild in guilds]
     formatted_guilds: str = "\n".join(guilds_data)
 
     return format_code_block(header + formatted_guilds)
+
 
 async def tpose(message: discord.Message, parameters: List[str]) -> str:
     """ Request random tpose image. """
@@ -672,6 +828,42 @@ async def tpose(message: discord.Message, parameters: List[str]) -> str:
 
     return src
 
+
+async def play(message: discord.Message, parameters: List[str]) -> str:
+    """ Request bot to join voice channel and play a song. """
+    length: int = len(parameters)
+
+    # Attempt to join voice channel
+    channel: discord.VoiceChannel = message.author.voice.channel
+    if channel is None:
+        return "You must be connected to a voice channel to use this command"
+
+    has_query: bool = length > 1
+    query: str = " ".join(parameters[1:]) if has_query else None
+
+    voice_client: discord.VoiceClient = await channel.connect()
+    video: Video = Video(voice_client, query)
+
+    # Search for a video if query was given
+
+
+async def leave(message: discord.Message, parameters: List[str]) -> str:
+    """ Request bot to leave voice channel. """
+    length: int = len(parameters)
+    required_length: int = 1
+
+    # Validate length
+    if length > required_length:
+        return "Too many parameters"
+
+    # Attempt to leave voice channel
+    is_in_voice_channel: bool = Video.verify_queue(message.guild.id)
+    if is_in_voice_channel:
+        await client.voice_client.disconnect()
+    else:
+        return "I am not connected to a voice channel already"
+
+
 # ---------- Application variables ---------- #
 
 # Async scheduler
@@ -680,62 +872,79 @@ loop: asyncio.ProactorEventLoop = asyncio.get_event_loop()
 # Tpose image srcs
 srcs: List[str] = request_tpose_srcs(max_page=3)
 
+# Restriction time
+min_seconds_amount: int = 1
+max_seconds_amount: int = 7200
+
+synthos_id: int = 517441496149131305
+
 # Map string to command object
 commands: Dict[str, Command] = {
     "help": Command(f"{prefix}help",
                     ("Provides brief description for all commands, " +
-                    "or extended description for a specific command " +
-                    "if any is given"),
+                     "or extended description for a specific command " +
+                     "if any is given"),
                     f"Get help for a command\n{prefix}help mute"),
+    "code": Command(f"{prefix}code",
+                    "Provides file with current source code for TPoseBot",
+                    f"\n{prefix}code"),
     "report": Command(f"{prefix}report",
-                    "Send a message to developer (report a bug, request a feature, etc)", 
-                    (f"Report a permission related bug" + 
-                    f"\n{prefix}report administrators are not having permission to mute")),
+                      "Send a message to developer (report a bug, request a feature, etc)",
+                      (f"Report a permission related bug" +
+                       f"\n{prefix}report administrators are not having permission to mute")),
     "amputate": Command(f"{prefix}amputate",
-                    ("Amputate user for a given number of seconds, removing all attached roles, " +
-                     "event is aborted if target member roles are updated while it runs"), 
-                    f"Amputate Fred for 30 seconds\n{prefix}amputate @Fred 30"),
+                        ("Amputate user for a given number of seconds, removing all attached roles, " +
+                         "event is aborted if target member roles are updated while it runs"),
+                        f"Amputate Fred for 30 seconds\n{prefix}amputate @Fred 30"),
     "unamputate": Command(f"{prefix}unamputate",
-                    "Unamputate a amputated user", 
-                    f"Unamputate Fred\n{prefix}unamputate @Fred"),
+                          "Unamputate a amputated user",
+                          f"Unamputate Fred\n{prefix}unamputate @Fred"),
     "amputatelist": Command(f"{prefix}amputatelist",
-                     "Get list of currently amputated users in this server",
-                     f"\n{prefix}amputatelist"),
+                            "Get list of currently amputated users in this server",
+                            f"\n{prefix}amputatelist"),
     "mute": Command(f"{prefix}mute",
-                    "Mute user for a given number of seconds", 
+                    "Mute user for a given number of seconds",
                     f"Mute Fred for 30 seconds\n{prefix}mute @Fred 30"),
     "unmute": Command(f"{prefix}unmute",
-                    "Unmute a muted user", 
-                    f"Unmute Fred\n{prefix}unmute @Fred"),
+                      "Unmute a muted user",
+                      f"Unmute Fred\n{prefix}unmute @Fred"),
     "mutelist": Command(f"{prefix}mutelist",
-                     "Get list of currently muted users in this server",
-                     f"\n{prefix}mutelist"),
+                        "Get list of currently muted users in this server",
+                        f"\n{prefix}mutelist"),
     "deaf": Command(f"{prefix}deaf",
-                    "Deafen user for a given number of seconds", 
+                    "Deafen user for a given number of seconds",
                     f"Deafen Fred for 30 seconds\n{prefix}deaf @Fred 30"),
     "undeaf": Command(f"{prefix}undeaf",
-                    "Undeaf a deafened user", 
-                    f"Undeaf Fred\n{prefix}undeaf @Fred"),
+                      "Undeaf a deafened user",
+                      f"Undeaf Fred\n{prefix}undeaf @Fred"),
     "deaflist": Command(f"{prefix}deaflist",
-                     "Get list of currently deafened users in this server",
-                     f"\n{prefix}deaflist"),
+                        "Get list of currently deafened users in this server",
+                        f"\n{prefix}deaflist"),
     "serverlist": Command(f"{prefix}serverlist",
-                     "Get list of servers in which TPoseBot is present",
-                     f"\n{prefix}serverlist"),
+                          "Get list of servers in which TPoseBot is present",
+                          f"\n{prefix}serverlist"),
     "tpose": Command(f"{prefix}tpose",
                      "Get random tpose image",
-                     f"\n{prefix}tpose")
+                     f"\n{prefix}tpose"),
+    "play": Command(f"{prefix}play",
+                    "Request bot to join voice channel the user is currently in and search for a video to play",
+                    f"Search for a tpose related video to play\n{prefix}play tpose"),
+    "leave": Command(f"{prefix}leave",
+                     "Request bot to leave voice channel in current server",
+                     f"\n{prefix}leave tpose")
 }
 
+# Specific messages to be replied
 special_messages: Dict[str, Callable] = {
     "quem": get_pediu,
     "ninguem": lambda: "pediu",
     "ok": lambda: "boomer",
-    "comedores de": lambda: "coco"
+    "comedores de": lambda: "coc\u00f4"
 }
 
 commands_map: Dict[str, Callable] = {
     f"{prefix}help": get_help,
+    f"{prefix}code": code,
     f"{prefix}report": report,
     f"{prefix}amputate": amputate,
     f"{prefix}unamputate": unamputate,
@@ -747,11 +956,14 @@ commands_map: Dict[str, Callable] = {
     f"{prefix}unmute": unmute,
     f"{prefix}mutelist": mutelist,
     f"{prefix}serverlist": serverlist,
-    f"{prefix}tpose": tpose
+    f"{prefix}tpose": tpose,
+    f"{prefix}play": play,
+    f"{prefix}leave": leave
 }
 
-event_classes: Set[ClassVar[Restriction]] = {DeafEvent, MuteEvent}
+event_classes: Set[ClassVar[RestrictEvent]] = {DeafEvent, MuteEvent}
 voice_restrictions: Set[str] = {"deaf", "mute"}
+
 
 # ---------- Event listeners ---------- #
 
@@ -760,29 +972,33 @@ voice_restrictions: Set[str] = {"deaf", "mute"}
 async def on_connect():
     # Initialize data that requires connection
     RestrictEvent.events = {guild.id: {} for guild in client.guilds}
+    Video.queues = {guild.id: [] for guild in client.guilds}
 
     for subclass in RestrictEvent.__subclasses__():
         subclass.events = copy.deepcopy(RestrictEvent.events)
+
 
 # Bot ready
 @client.event
 async def on_ready():
     print(f"{client.user} awoke")
 
+
 # Send message
 @client.event
 async def on_message(message: discord.Message):
     try:
         reply: str = await process_message(message)
-        if reply != None:
+        if reply is not None:
             await message.channel.send(reply)
     except UnicodeEncodeError:
-        seconds_passed
+        pass
+
 
 # Join, leave, mute, deafen on VC
 @client.event
-async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, 
-                                                        after: discord.VoiceState):
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState,
+                                after: discord.VoiceState):
     was_unmuted: bool = before.mute and not after.mute
     was_undeafen: bool = before.deaf and not after.deaf
     guild_id: int = member.guild.id
@@ -797,20 +1013,23 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         if DeafEvent.verify_event(guild_id, member.id):
             DeafEvent.remove_event(guild_id, member.id)
 
+
 # User updated status, activity, nickname or roles
 @client.event
 async def on_member_update(before: discord.Member, after: discord.Member):
-    were_roles_changed = not before.roles is after.roles
-    
+    were_roles_changed: bool = before.roles is not after.roles
+
+    # Abort amputate event if roles are changed
     if were_roles_changed:
-        is_amputated = AmputateEvent.verify_event(after.guild.id, after.id)
+        is_amputated: bool = AmputateEvent.verify_event(after.guild.id, after.id)
         if is_amputated:
-            amputate_event = AmputateEvent.get_event(after.guild.id, after.id)
-            happened_recently = amputate_event.get_recent_state()
+            amputate_event: AmputateEvent = AmputateEvent.get_event(after.guild.id, after.id)
+            happened_recently: bool = amputate_event.get_recent_state()
             if not happened_recently:
                 AmputateEvent.remove_event(after.guild.id, after.id)
 
-# Bot join guild
+
+# Member join guild
 @client.event
 async def on_guild_join(guild: discord.Guild):
     was_bot_added: bool = not MuteEvent.verify_guild(guild.id)
@@ -819,6 +1038,8 @@ async def on_guild_join(guild: discord.Guild):
     if was_bot_added:
         for event_class in event_classes:
             event_class.add_guild(guild.id)
+        Video.add_queue(guild.id)
+
 
 # Member leave guild
 @client.event
@@ -829,5 +1050,7 @@ async def on_member_remove(member: discord.Member):
     if was_bot_removed:
         for event_class in event_classes:
             event_class.remove_guild(member.guild.id)
+        Video.remove_queue(member.guild.id)
+
 
 client.run(token)

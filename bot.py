@@ -281,10 +281,10 @@ class Video:
     """ Represent a video to be played. """
     queues: Dict[int, List[Video]] = {}
 
-    def __init__(self, voice_client: discord.VoiceClient, guild: discord.Guild, query: str):
-        self.voice_client: discord.VoiceClient = voice_client
+    def __init__(self, title: str, guild: discord.Guild, voice_client: discord.VoiceClient):
+        self.title: str = title
         self.guild: discord.Guild = guild
-        self.query: str = query
+        self.voice_client: discord.VoiceClient = voice_client
 
         Video.add_video(guild.id, self)
 
@@ -342,11 +342,11 @@ class Video:
 
         highest_index_length: int = len(str(len(videos) + 1))
 
-        name_lengths: Set[int] = {len(video.name) for video in videos}
+        name_lengths: Set[int] = {len(video.title) for video in videos}
         highest_name_length: int = max(name_lengths)
 
         events_data: List[str] = [(f"{str(i + 1).ljust(highest_index_length)}: " +
-                                   f"{video.name.ljust(highest_name_length)}")
+                                   f"{video.title.ljust(highest_name_length)}")
                                   for i, video in enumerate(videos)]
 
         formatted_events: str = "\n".join(events_data)
@@ -875,11 +875,15 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
             video_data: Dict = ydl.extract_info(url, download=False)
         video_id: str = video_data["id"]
         video_title: str = video_data["title"]
+        duration: int = int(video_data["duration"])
+
+        if duration > 3600:
+            return "This video is too large"
 
         local_file: str = f"./{youtube_videos_dir}/{video_id}"
         file_exists: bool = os.path.exists(local_file)
         if not file_exists:
-            await message.channel.send("Video not found on my filesystem, I'm about to download it")
+            await message.channel.send("Downloading...")
 
             ydl_opts = {
                 "postprocessors": [
@@ -887,27 +891,20 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
                         "key": "FFmpegExtractAudio",
                         "preferredquality": "192",
                     }
-                ],
-                "download_archive": f"./{youtube_videos_dir}"
+                ]
             }
 
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
 
-        os.rename(f"./{youtube_videos_dir}/{video_title}", f"./{youtube_videos_dir}/{video_id}")
-        audio_source = await discord.FFmpegOpusAudio.from_probe(f"./{youtube_videos_dir}/{video_id}",
-                                                                method='fallback')
+            filename: str = next(filename for filename in os.listdir()
+                                 if filename.find(f"{video_title}-{video_id}") > -1)
+            os.rename(f"./{filename}", local_file)
+
+        audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(local_file)
 
         voice_client.play(audio_source)
-        # video: Video = Video(voice_client, message.guild, query, yt.title)
-        # return "Playing video f'{yt.title}'"
-        if message.guild.id == 517905518279524362:
-            try:
-                voice_client.play("E:/osu!/Songs/1084298 katagiri - Sendan Life (katagiri Bootleg)/audio.mp3")
-            except:
-                print("Error")
-                import playsound
-                playsound.playsound("E:/tposebot/cursed-audios/unilefi.mp3")
+        video: Video = Video(video_title, message.guild, voice_client)
 
 
 async def leave(message: discord.Message, parameters: List[str]) -> str:

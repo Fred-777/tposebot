@@ -5,16 +5,19 @@ from typing import *
 # Abstract classes and methods
 from abc import ABC, abstractmethod
 
+import aiohttp
 import asyncio
 import bs4
 import copy
 import discord
 import dotenv
 import json
+import mysql.connector
 import os
 import random
 import re
 import requests
+import youtube_dl
 
 """
 with open("E:/tposebot/bot.py") as file:
@@ -28,6 +31,7 @@ env_path: str = "./.env"
 os.chdir(base_path)
 dotenv.load_dotenv(env_path)
 
+api_key: str = os.getenv("api_key")
 prefix: str = os.getenv("prefix")
 token: str = os.getenv("token")
 sc_param: str = os.getenv("sc_param")
@@ -35,6 +39,15 @@ sc_param: str = os.getenv("sc_param")
 bad_words_path: str = "./bad-words.txt"
 extra_srcs_path: str = "./extra-srcs.txt"
 report_path: str = "./reports.txt"
+youtube_videos_dir: str = "youtube-videos"
+
+# db: mysql.connector.connection.MySQLConnection = mysql.connector.connect(
+#     host="localhost",
+#     user="root",
+#     passwd="root",
+#     database="tposebot"
+# )
+# cursor: mysql.connector.cursor.MySQLCursor = db.cursor()
 
 # ---------- Load environment ---------- #
 
@@ -268,33 +281,31 @@ class Video:
     """ Represent a video to be played. """
     queues: Dict[int, List[Video]] = {}
 
-    def __init__(self, src: str, guild: discord.Guild):
-        self.src: str = src
+    def __init__(self, voice_client: discord.VoiceClient, guild: discord.Guild, query: str):
+        self.voice_client: discord.VoiceClient = voice_client
+        self.guild: discord.Guild = guild
+        self.query: str = query
+
         Video.add_video(guild.id, self)
 
     @classmethod
     def add_queue(cls, guild_id: int) -> None:
-        """ Add guild to queue dict. """
+        """ Add guild queue to queue dict. """
         cls.queues[guild_id] = []
 
     @classmethod
     def remove_queue(cls, guild_id: int) -> None:
-        """ Remove guild from queue dict. """
+        """ Remove guild queue from queue dict. """
         del cls.queues[guild_id]
 
     @classmethod
-    def verify_queue(cls, guild_id: int) -> bool:
-        """ Verify if queue dict has guild by id. """
-        return guild_id in cls.queues
-
-    @classmethod
     def get_queue(cls, guild_id: int) -> List[Video]:
-        """ Get queue from guild dict. """
+        """ Get guild queue from queue dict. """
         return cls.queues[guild_id]
 
     @classmethod
     def clear_queue(cls, guild_id: int) -> None:
-        """ Clear queue for a guild. """
+        """ Clear guild queue for a guild. """
         cls.queues[guild_id] = []
 
     @classmethod
@@ -309,9 +320,9 @@ class Video:
         del cls.queues[guild_id][video_index]
 
     @classmethod
-    def verify_video(cls, guild_id: int) -> bool:
-        """ Verify if queue dict has video by id. """
-        return guild_id in cls.queues
+    def get_video(cls, guild_id: int) -> List[Video]:
+        """ Get videos from guild queue. """
+        return cls.queues[guild_id]
 
     @classmethod
     def get_videos(cls, guild_id: int) -> List[Video]:
@@ -329,12 +340,12 @@ class Video:
 
         header: str = f"{len(videos)} {member_pluralized}\n\n"
 
-        highest_id_length: int = len(str(len(videos) + 1))
+        highest_index_length: int = len(str(len(videos) + 1))
 
         name_lengths: Set[int] = {len(video.name) for video in videos}
         highest_name_length: int = max(name_lengths)
 
-        events_data: List[str] = [(f"{str(i + 1).ljust(highest_id_length)}: " +
+        events_data: List[str] = [(f"{str(i + 1).ljust(highest_index_length)}: " +
                                    f"{video.name.ljust(highest_name_length)}")
                                   for i, video in enumerate(videos)]
 
@@ -385,7 +396,8 @@ def get_pediu() -> str:
 def request_image_srcs(query_param: str, max_page: int = 1) -> List[str]:
     """ Return image srcs found until a given page from query service. """
     base_url: str = "http://results.dogpile.com"
-    headers: Dict[str, str] = {
+
+    request_headers: Dict[str, str] = {
         "Accept": "text/html",
         "User-Agent": "Chrome"
     }
@@ -395,7 +407,7 @@ def request_image_srcs(query_param: str, max_page: int = 1) -> List[str]:
 
     srcs: List[str] = []
     for url in urls:
-        response: requests.Response = requests.get(url, headers=headers)
+        response: requests.Response = requests.get(url, headers=request_headers)
         soup: bs4.BeautifulSoup = bs4.BeautifulSoup(response.content, features="lxml")
         imgs: bs4.element.Tag = soup.select("div > a > img")
         page_srcs: List[str] = [img["src"] for img in imgs]
@@ -580,25 +592,6 @@ async def process_message(message: discord.Message) -> str:
 
         print(f"Message received: {message.content}")
 
-        # Check bad words
-        replaced_content: str
-        bad_word_amount: int
-        replaced_content, bad_word_amount = replace_bad_words(message.content)
-        has_bad_word: bool = bad_word_amount > 0
-
-        # Filter bad words
-        if has_bad_word:
-            is_guild_synthos: bool = message.guild.id == synthos_id
-            if not is_guild_synthos:
-                await message.delete()
-
-            pluralized: str = pluralize(bad_word_amount, "bad word", "bad words")
-            feedback_message: str = (f"{message.author.mention} typed the following message " +
-                                     f"containing {bad_word_amount} {pluralized}:")
-            await message.channel.send(feedback_message)
-
-            return replaced_content
-
         # Handle special messages
         content_lower: str = message.content.lower()
         key: str = next((key for key in special_messages if content_lower.startswith(key)), None)
@@ -632,7 +625,6 @@ async def process_message(message: discord.Message) -> str:
 
 def check_spam(text: str) -> bool:
     """ Inform if text received is spam. """
-
     # Require minimum amount of distinct chars
     min_distinct_chars_length: int = 5
 
@@ -669,6 +661,21 @@ def check_spam(text: str) -> bool:
         return True
 
     return False
+
+
+async def request_video_url(query: str) -> str:
+    """ Find the most relevant youtube video url for a given query. """
+    query_url: str = ("https://content.googleapis.com/youtube/v3/search"
+                      f"?maxResults=1&part=snippet&q={query}&key={api_key}&type=video")
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(query_url) as response:
+            response_obj: Dict = await response.json()
+            video_id: str = response_obj["items"][0]["id"]["videoId"]
+
+    video_url: str = f"https://www.youtube.com/watch?v={video_id}"
+
+    return video_url
 
 
 # ---------- Interface ---------- #
@@ -735,10 +742,18 @@ async def report(message: discord.Message, parameters: List[str]) -> str:
     is_duplicate: bool = report_message in reports
     is_spam: bool = check_spam(report_message)
 
+    # Check bad words
+    replaced_content: str
+    bad_word_amount: int
+    replaced_content, bad_word_amount = replace_bad_words(message.content)
+    has_bad_word: bool = bad_word_amount > 0
+
     if is_duplicate:
         return "This message was already sent"
     if is_spam:
         return "Your message was detected as spam and got filtered"
+    if has_bad_word:
+        return "Your message has bad words and got filtered"
 
     reports.add(report_message)
     with open(report_path, "w") as file:
@@ -830,21 +845,69 @@ async def tpose(message: discord.Message, parameters: List[str]) -> str:
 
 
 async def play(message: discord.Message, parameters: List[str]) -> str:
-    """ Request bot to join voice channel and play a song. """
+    """ Request bot to join voice channel and optionally play a song. """
     length: int = len(parameters)
 
     # Attempt to join voice channel
-    channel: discord.VoiceChannel = message.author.voice.channel
-    if channel is None:
+    is_user_in_channel: bool = message.author.voice is not None
+    if not is_user_in_channel:
         return "You must be connected to a voice channel to use this command"
 
     has_query: bool = length > 1
     query: str = " ".join(parameters[1:]) if has_query else None
 
-    voice_client: discord.VoiceClient = await channel.connect()
-    video: Video = Video(voice_client, query)
+    is_bot_in_channel: bool = message.guild.voice_client is not None
+    channel: discord.VoiceChannel = message.author.voice.channel
+
+    if is_bot_in_channel:
+        voice_client: discord.VoiceClient = message.guild.voice_client
+    else:
+        voice_client: discord.VoiceClient = await channel.connect()
 
     # Search for a video if query was given
+    if query is not None:
+
+        youtube_video_regex: str = "youtube.com/watch\?.*v=[\w\-]{11}"
+        is_query_url: bool = re.search(youtube_video_regex, query) is not None
+        url: str = query if is_query_url else await request_video_url(query)
+
+        with youtube_dl.YoutubeDL() as ydl:
+            video_data: Dict = ydl.extract_info(url, download=False)
+        video_id: str = video_data["id"]
+        video_title: str = video_data["title"]
+
+        local_file: str = f"./{youtube_videos_dir}/{video_id}"
+        file_exists: bool = os.path.exists(local_file)
+        if not file_exists:
+            await message.channel.send("Video not found on my filesystem, I'm about to download it")
+
+            ydl_opts = {
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredquality": "192",
+                    }
+                ],
+                "download_archive": f"./{youtube_videos_dir}"
+            }
+
+            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+
+        os.rename(f"./{youtube_videos_dir}/{video_title}", f"./{youtube_videos_dir}/{video_id}")
+        audio_source = await discord.FFmpegOpusAudio.from_probe(f"./{youtube_videos_dir}/{video_id}",
+                                                                method='fallback')
+
+        voice_client.play(audio_source)
+        # video: Video = Video(voice_client, message.guild, query, yt.title)
+        # return "Playing video f'{yt.title}'"
+        if message.guild.id == 517905518279524362:
+            try:
+                voice_client.play("E:/osu!/Songs/1084298 katagiri - Sendan Life (katagiri Bootleg)/audio.mp3")
+            except:
+                print("Error")
+                import playsound
+                playsound.playsound("E:/tposebot/cursed-audios/unilefi.mp3")
 
 
 async def leave(message: discord.Message, parameters: List[str]) -> str:
@@ -857,11 +920,14 @@ async def leave(message: discord.Message, parameters: List[str]) -> str:
         return "Too many parameters"
 
     # Attempt to leave voice channel
-    is_in_voice_channel: bool = Video.verify_queue(message.guild.id)
+    guild: discord.Guild = message.guild
+    is_in_voice_channel: bool = guild.voice_client is not None
+
     if is_in_voice_channel:
-        await client.voice_client.disconnect()
+        await guild.voice_client.disconnect()
+        Video.clear_queue(guild.id)
     else:
-        return "I am not connected to a voice channel already"
+        return "I am not connected to a voice channel"
 
 
 # ---------- Application variables ---------- #
@@ -871,6 +937,9 @@ loop: asyncio.ProactorEventLoop = asyncio.get_event_loop()
 
 # Tpose image srcs
 srcs: List[str] = request_tpose_srcs(max_page=3)
+
+# Youtube url for query
+youtube_url: str = "https://www.youtube.com/results?search_query=hohdsohdohfsa"
 
 # Restriction time
 min_seconds_amount: int = 1
@@ -927,7 +996,7 @@ commands: Dict[str, Command] = {
                      "Get random tpose image",
                      f"\n{prefix}tpose"),
     "play": Command(f"{prefix}play",
-                    "Request bot to join voice channel the user is currently in and search for a video to play",
+                    "Request bot to join voice channel and optionally search for a video to play",
                     f"Search for a tpose related video to play\n{prefix}play tpose"),
     "leave": Command(f"{prefix}leave",
                      "Request bot to leave voice channel in current server",
@@ -939,7 +1008,8 @@ special_messages: Dict[str, Callable] = {
     "quem": get_pediu,
     "ninguem": lambda: "pediu",
     "ok": lambda: "boomer",
-    "comedores de": lambda: "coc\u00f4"
+    "comedores de": lambda: "coc\u00f4",
+    "oi": lambda: "oi"
 }
 
 commands_map: Dict[str, Callable] = {
@@ -963,7 +1033,6 @@ commands_map: Dict[str, Callable] = {
 
 event_classes: Set[ClassVar[RestrictEvent]] = {DeafEvent, MuteEvent}
 voice_restrictions: Set[str] = {"deaf", "mute"}
-
 
 # ---------- Event listeners ---------- #
 

@@ -39,7 +39,21 @@ sc_param: str = os.getenv("sc_param")
 bad_words_path: str = "./bad-words.txt"
 extra_srcs_path: str = "./extra-srcs.txt"
 report_path: str = "./reports.txt"
+
 youtube_videos_dir: str = "youtube-videos"
+cursed_audios_dir: str = "cursed-audios"
+download_path_dir: str = "download-path"
+
+dirnames: List[str] = [
+    youtube_videos_dir,
+    cursed_audios_dir,
+    download_path_dir,
+]
+
+for dirname in dirnames:
+    file_exists: bool = os.path.exists(f"./{dirname}")
+    if not file_exists:
+        os.mkdir(dirname)
 
 # db: mysql.connector.connection.MySQLConnection = mysql.connector.connect(
 #     host="localhost",
@@ -281,8 +295,9 @@ class Video:
     """ Represent a video to be played. """
     queues: Dict[int, List[Video]] = {}
 
-    def __init__(self, title: str, guild: discord.Guild, voice_client: discord.VoiceClient):
+    def __init__(self, title: str, duration: int, guild: discord.Guild, voice_client: discord.VoiceClient):
         self.title: str = title
+        self.duration: int = duration
         self.guild: discord.Guild = guild
         self.voice_client: discord.VoiceClient = voice_client
 
@@ -367,17 +382,20 @@ def extract_id(s: str) -> int:
     return int(match[0]) if match is not None else -1
 
 
-def validate_seconds(seconds_str: str) -> bool:
-    """ Inform if seconds is a number inside given boundaries. """
+def validate_number(num_str: str, min_value: int, max_value: int) -> bool:
+    """ Inform if given number is in range of given boundaries. """
     try:
-        is_seconds_number: bool = re.search("\D", seconds_str) is None
-        seconds: int = int(seconds_str)
-        is_seconds_on_bounds: bool = (min_seconds_amount <= seconds <= max_seconds_amount)
-        is_seconds_valid: bool = is_seconds_number and is_seconds_on_bounds
-    except ValueError:
-        is_seconds_valid: bool = False
+        if num_str.startswith("-"):
+            num_str = num_str[1:]
 
-    return is_seconds_valid
+        is_num_number: bool = re.search("\D", num_str) is None
+        num: int = int(num_str)
+        is_num_on_bounds: bool = (min_value <= num <= max_value)
+        is_num_valid: bool = is_num_number and is_num_on_bounds
+    except ValueError:
+        is_num_valid: bool = False
+
+    return is_num_valid
 
 
 def get_pediu() -> str:
@@ -481,7 +499,9 @@ async def restrict(message: discord.Message,
     member: discord.Member = next((member for member in members if member.id == member_id), None)
 
     # Validate seconds
-    is_seconds_valid: bool = validate_seconds(seconds_str)
+    min_seconds_amount: int = 1
+    max_seconds_amount: int = 7200
+    is_seconds_valid: bool = validate_number(seconds_str, min_seconds_amount, max_seconds_amount)
 
     if not is_seconds_valid:
         return ("Invalid amount of seconds, it has to be an integer " +
@@ -497,7 +517,7 @@ async def restrict(message: discord.Message,
         await member.edit(**kwarg_enable)
         await message.channel.send(reply)
         await asyncio.sleep(seconds)
-    except discord.errors.HTTPException as e:
+    except discord.errors.HTTPException:
         if restrict_event_class.name_present in voice_restrictions:
             return "Target user is not in voice chat"
         else:
@@ -678,6 +698,17 @@ async def request_video_url(query: str) -> str:
     return video_url
 
 
+async def request_voice_client(author: discord.Member, guild: discord.Guild):
+    """ Request voice client for given guild and connect bot if it's not connected. """
+    is_bot_in_channel: bool = guild.voice_client is not None
+    if is_bot_in_channel:
+        voice_client: discord.VoiceClient = guild.voice_client
+    else:
+        voice_client: discord.VoiceClient = await author.voice.channel.connect()
+
+    return voice_client
+
+
 # ---------- Interface ---------- #
 
 def suggest_help() -> str:
@@ -844,11 +875,35 @@ async def tpose(message: discord.Message, parameters: List[str]) -> str:
     return src
 
 
+async def cursed(message: discord.Message, parameters: List[str]) -> str:
+    """ Request bot to join voice channel and play a random cursed audio. """
+    length: int = len(parameters)
+    required_length: int = 1
+
+    if length > required_length:
+        return "Too many parameters"
+
+    is_user_in_channel: bool = message.author.voice is not None
+    if not is_user_in_channel:
+        return "You must be connected to a voice channel to use this command"
+
+    is_bot_in_channel: bool = message.guild.voice_client is not None
+    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+
+    filenames: List[str] = os.listdir(f"./{cursed_audios_dir}")
+    filename: str = random.choice(filenames)
+    file_path = f"./{cursed_audios_dir}/{filename}"
+    audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path)
+
+    voice_client.play(audio_source)
+
+    return f"Playing {filename}"
+
+
 async def play(message: discord.Message, parameters: List[str]) -> str:
     """ Request bot to join voice channel and optionally play a song. """
     length: int = len(parameters)
 
-    # Attempt to join voice channel
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
         return "You must be connected to a voice channel to use this command"
@@ -856,13 +911,7 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
     has_query: bool = length > 1
     query: str = " ".join(parameters[1:]) if has_query else None
 
-    is_bot_in_channel: bool = message.guild.voice_client is not None
-    channel: discord.VoiceChannel = message.author.voice.channel
-
-    if is_bot_in_channel:
-        voice_client: discord.VoiceClient = message.guild.voice_client
-    else:
-        voice_client: discord.VoiceClient = await channel.connect()
+    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
 
     # Search for a video if query was given
     if query is not None:
@@ -875,13 +924,14 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
             video_data: Dict = ydl.extract_info(url, download=False)
         video_id: str = video_data["id"]
         video_title: str = video_data["title"]
-        duration: int = int(video_data["duration"])
+        video_duration: int = int(video_data["duration"])
 
-        if duration > 3600:
+        if video_duration > 3600:
             return "This video is too large"
 
-        local_file: str = f"./{youtube_videos_dir}/{video_id}"
-        file_exists: bool = os.path.exists(local_file)
+        file_path: str = f"./{youtube_videos_dir}/{video_id}"
+        file_exists: bool = os.path.exists(file_path)
+
         if not file_exists:
             await message.channel.send("Downloading...")
 
@@ -895,16 +945,21 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
             }
 
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                os.chdir(f"./{download_path_dir}")
                 ydl.download([url])
+                os.chdir("..")
 
-            filename: str = next(filename for filename in os.listdir()
-                                 if filename.find(f"{video_title}-{video_id}") > -1)
-            os.rename(f"./{filename}", local_file)
+            filenames: Generator[str] = (filename for filename in os.listdir(download_path_dir))
+            filename: str = next(filename for filename in filenames
+                                 if filename.find(f"-{video_id}") > -1)
+            os.rename(f"./{download_path_dir}/{filename}", file_path)
 
-        audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(local_file)
+        audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path)
 
-        voice_client.play(audio_source)
-        video: Video = Video(video_title, message.guild, voice_client)
+        video: Video = Video(video_title, video_duration, message.guild, voice_client)
+
+        if not voice_client.is_playing():
+            voice_client.play(audio_source)
 
 
 async def leave(message: discord.Message, parameters: List[str]) -> str:
@@ -916,7 +971,10 @@ async def leave(message: discord.Message, parameters: List[str]) -> str:
     if length > required_length:
         return "Too many parameters"
 
-    # Attempt to leave voice channel
+    is_user_in_channel: bool = message.author.voice is not None
+    if not is_user_in_channel:
+        return "You must be connected to a voice channel to use this command"
+
     guild: discord.Guild = message.guild
     is_in_voice_channel: bool = guild.voice_client is not None
 
@@ -925,6 +983,114 @@ async def leave(message: discord.Message, parameters: List[str]) -> str:
         Video.clear_queue(guild.id)
     else:
         return "I am not connected to a voice channel"
+
+
+async def pause(message: discord.Message, parameters: List[str]) -> str:
+    """ Request bot to pause current video. """
+    length: int = len(parameters)
+    required_length: int = 1
+
+    # Validate length
+    if length > required_length:
+        return "Too many parameters"
+
+    is_user_in_channel: bool = message.author.voice is not None
+    if not is_user_in_channel:
+        return "You must be connected to a voice channel to use this command"
+
+    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+
+    if voice_client.is_playing():
+        voice_client.pause()
+    else:
+        return "I am not playing already"
+
+
+async def unpause(message: discord.Message, parameters: List[str]) -> str:
+    """ Request bot to unpause current video. """
+    length: int = len(parameters)
+    required_length: int = 1
+
+    # Validate length
+    if length > required_length:
+        return "Too many parameters"
+
+    is_user_in_channel: bool = message.author.voice is not None
+    if not is_user_in_channel:
+        return "You must be connected to a voice channel to use this command"
+
+    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+
+    if voice_client.is_playing():
+        return "I am already unpaused"
+    else:
+        voice_client.resume()
+
+
+async def stop(message: discord.Message, parameters: List[str]) -> str:
+    """ Request bot to stop playing and reset queue. """
+    length: int = len(parameters)
+    required_length: int = 1
+
+    # Validate length
+    if length > required_length:
+        return "Too many parameters"
+
+    is_user_in_channel: bool = message.author.voice is not None
+    if not is_user_in_channel:
+        return "You must be connected to a voice channel to use this command"
+
+    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+
+    voice_client.stop()
+    Video.clear_queue(message.guild.id)
+
+
+async def skip(message: discord.Message, parameters: List[str]) -> str:
+    """ Request bot to skip current video. """
+    length: int = len(parameters)
+    required_length: int = 1
+
+    # Validate length
+    if length > required_length:
+        return "Too many parameters"
+
+    is_user_in_channel: bool = message.author.voice is not None
+    if not is_user_in_channel:
+        return "You must be connected to a voice channel to use this command"
+
+    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+
+    # TODO skip to next video on queue
+    Video.clear_queue(message.guild.id)
+
+
+async def dice(message: discord.Message, parameters: List[str]) -> str:
+    """ Select a random number between 1 and given max number. """
+    length: int = len(parameters)
+    required_length: int = 2
+
+    # Validate length
+    if length == 1:
+        return "No 'max number' parameter was given"
+
+    if length > required_length:
+        return "Too many parameters"
+
+    # Validate number
+    max_num_str: str = parameters[1]
+    min_value: int = 2
+    max_value: int = 1000000
+    is_max_num_valid: int = validate_number(max_num_str, min_value, max_value)
+
+    if not is_max_num_valid:
+        return ("Invalid max number, it has to be an integer " +
+                f"between {min_value} and {max_value}")
+
+    max_num: int = int(max_num_str)
+    random_num: int = random.randint(1, max_num)
+
+    return random_num
 
 
 # ---------- Application variables ---------- #
@@ -945,14 +1111,15 @@ max_seconds_amount: int = 7200
 synthos_id: int = 517441496149131305
 
 # Map string to command object
+
 commands: Dict[str, Command] = {
     "help": Command(f"{prefix}help",
-                    ("Provides brief description for all commands, " +
+                    ("Provide brief description for all commands, " +
                      "or extended description for a specific command " +
                      "if any is given"),
                     f"Get help for a command\n{prefix}help mute"),
     "code": Command(f"{prefix}code",
-                    "Provides file with current source code for TPoseBot",
+                    "Provide file with my current source code",
                     f"\n{prefix}code"),
     "report": Command(f"{prefix}report",
                       "Send a message to developer (report a bug, request a feature, etc)",
@@ -966,7 +1133,7 @@ commands: Dict[str, Command] = {
                           "Unamputate a amputated user",
                           f"Unamputate Fred\n{prefix}unamputate @Fred"),
     "amputatelist": Command(f"{prefix}amputatelist",
-                            "Get list of currently amputated users in this server",
+                            "Get list of currently amputated users",
                             f"\n{prefix}amputatelist"),
     "mute": Command(f"{prefix}mute",
                     "Mute user for a given number of seconds",
@@ -975,7 +1142,7 @@ commands: Dict[str, Command] = {
                       "Unmute a muted user",
                       f"Unmute Fred\n{prefix}unmute @Fred"),
     "mutelist": Command(f"{prefix}mutelist",
-                        "Get list of currently muted users in this server",
+                        "Get list of currently muted users",
                         f"\n{prefix}mutelist"),
     "deaf": Command(f"{prefix}deaf",
                     "Deafen user for a given number of seconds",
@@ -984,20 +1151,38 @@ commands: Dict[str, Command] = {
                       "Undeaf a deafened user",
                       f"Undeaf Fred\n{prefix}undeaf @Fred"),
     "deaflist": Command(f"{prefix}deaflist",
-                        "Get list of currently deafened users in this server",
+                        "Get list of currently deafened users",
                         f"\n{prefix}deaflist"),
     "serverlist": Command(f"{prefix}serverlist",
-                          "Get list of servers in which TPoseBot is present",
+                          "Get list of servers in which I am present",
                           f"\n{prefix}serverlist"),
     "tpose": Command(f"{prefix}tpose",
                      "Get random tpose image",
                      f"\n{prefix}tpose"),
+    "cursed": Command(f"{prefix}cursed",
+                      "Play a random cursed audio... beware",
+                      f"\n{prefix}cursed"),
     "play": Command(f"{prefix}play",
-                    "Request bot to join voice channel and optionally search for a video to play",
+                    "Request me to join voice channel and optionally search for a video to play",
                     f"Search for a tpose related video to play\n{prefix}play tpose"),
     "leave": Command(f"{prefix}leave",
-                     "Request bot to leave voice channel in current server",
-                     f"\n{prefix}leave tpose")
+                     "Request me to leave voice channel",
+                     f"\n{prefix}leave"),
+    "pause": Command(f"{prefix}pause",
+                     "Request me to pause current video",
+                     f"\n{prefix}pause"),
+    "unpause": Command(f"{prefix}unpause",
+                       "Request me to unpause current video",
+                       f"\n{prefix}unpause"),
+    "stop": Command(f"{prefix}stop",
+                    "Request me to stop playing",
+                    f"\n{prefix}stop"),
+    "skip": Command(f"{prefix}skip",
+                    "Request me to skip current video",
+                    f"\n{prefix}skip"),
+    "dice": Command(f"{prefix}dice",
+                    "Roll a dice that returns a random value from 1 until given number",
+                    f"Roll a random number from 1 to 10\n{prefix}roll 10")
 }
 
 # Specific messages to be replied
@@ -1024,12 +1209,19 @@ commands_map: Dict[str, Callable] = {
     f"{prefix}mutelist": mutelist,
     f"{prefix}serverlist": serverlist,
     f"{prefix}tpose": tpose,
+    f"{prefix}cursed": cursed,
     f"{prefix}play": play,
-    f"{prefix}leave": leave
+    f"{prefix}leave": leave,
+    f"{prefix}pause": pause,
+    f"{prefix}unpause": unpause,
+    f"{prefix}stop": stop,
+    f"{prefix}skip": skip,
+    f"{prefix}dice": dice
 }
 
 event_classes: Set[ClassVar[RestrictEvent]] = {DeafEvent, MuteEvent}
 voice_restrictions: Set[str] = {"deaf", "mute"}
+
 
 # ---------- Event listeners ---------- #
 

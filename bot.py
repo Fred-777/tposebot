@@ -9,6 +9,7 @@ import aiohttp
 import asyncio
 import bs4
 import copy
+import datetime
 import discord
 import dotenv
 import json
@@ -18,11 +19,6 @@ import random
 import re
 import requests
 import youtube_dl
-
-"""
-with open("E:/tposebot/bot.py") as file:
-    exec(file.read())
-"""
 
 # ---------- Environment variables ---------- #
 
@@ -93,7 +89,6 @@ def format_code_block(text: str) -> str:
 
 class Command:
     """ Describe a command available from bot. """
-
     def __init__(self, name: str, description: str, example: str):
         self.name = name
         self.description = description
@@ -293,80 +288,115 @@ class MuteEvent(RestrictEvent):
 
 class Video:
     """ Represent a video to be played. """
-    queues: Dict[int, List[Video]] = {}
+    ids: Dict[int, int] = {}
+    queues: Dict[int, Dict[int, Video]] = {}
 
-    def __init__(self, title: str, duration: int, guild: discord.Guild, voice_client: discord.VoiceClient):
-        self.title: str = title
+    def __init__(self, title: str, duration: int, guild: discord.Guild, audio_source: discord.FFmpegPCMAudio):
+        self.id: int = Video.ids[guild.id]
+        self.title: str = title if len(title) <= 50 else f"{title[: 47]}..."
         self.duration: int = duration
         self.guild: discord.Guild = guild
-        self.voice_client: discord.VoiceClient = voice_client
+        self.audio_source: discord.FFmpegPCMAudio = audio_source
 
+        Video.ids[guild.id] += 1
         Video.add_video(guild.id, self)
+
+    def get_formatted_duration(self) -> str:
+        """ Get formatted representation of duration. """
+        if self.duration < 60:
+            return f"{self.duration}s"
+        elif self.duration < 3600:
+            return f"{self.duration // 60}m {self.duration % 60}s"
+        else:
+            return f"{self.duration // 3600}h {self.duration % 3600 // 60}m {self.duration % 60}s"
 
     @classmethod
     def add_queue(cls, guild_id: int) -> None:
-        """ Add guild queue to queue dict. """
-        cls.queues[guild_id] = []
+        """ Add video dict to guild dict. """
+        cls.queues[guild_id] = {}
 
     @classmethod
     def remove_queue(cls, guild_id: int) -> None:
-        """ Remove guild queue from queue dict. """
+        """ Remove video dict from guild dict. """
         del cls.queues[guild_id]
 
     @classmethod
-    def get_queue(cls, guild_id: int) -> List[Video]:
-        """ Get guild queue from queue dict. """
+    def get_queue(cls, guild_id: int) -> Dict[int, Video]:
+        """ Get video dict from guild dict. """
         return cls.queues[guild_id]
 
     @classmethod
     def clear_queue(cls, guild_id: int) -> None:
-        """ Clear guild queue for a guild. """
-        cls.queues[guild_id] = []
+        """ Clear video dict for a guild. """
+        cls.queues[guild_id] = {}
 
     @classmethod
     def add_video(cls, guild_id: int, video: Video) -> None:
-        """ Add video to video list. """
-        cls.queues[guild_id].append(video)
+        """ Add video to video dict. """
+        cls.queues[guild_id][video.id] = video
 
     @classmethod
-    def remove_video(cls, guild_id: int, video_id: int) -> None:
-        """ Remove video from video list. """
-        video_index: int = video_id - 1
-        del cls.queues[guild_id][video_index]
+    def remove_video(cls, guild_id: int) -> None:
+        """ Remove video from video dict. """
+        del cls.queues[guild_id][guild_id]
 
     @classmethod
-    def get_video(cls, guild_id: int) -> List[Video]:
-        """ Get videos from guild queue. """
-        return cls.queues[guild_id]
+    def get_videos(cls, guild_id: int) -> ValuesView[Video]:
+        """ Get videos from guild dict. """
+        return cls.queues[guild_id].values()
 
     @classmethod
-    def get_videos(cls, guild_id: int) -> List[Video]:
-        """ Get videos from guild queue. """
-        return cls.queues[guild_id]
+    def get_formatted_queue(cls, guild: discord.Guild) -> str:
+        """ Get formatted queue of videos in guild queue. """
+        videos: List[Video] = list(cls.get_videos(guild.id))
 
-    @classmethod
-    def get_formatted_list(cls, guild_id: int) -> str:
-        """ Get formatted list of videos in guild queue. """
-        videos: List[Video] = cls.get_videos(guild_id)
         if len(videos) == 0:
-            return f"There are no videos in queue"
+            return "Queue is empty"
+
+        voice_client: discord.VoiceClient = guild.voice_client
 
         member_pluralized: str = pluralize(len(videos), "video", "videos")
+        if voice_client.is_playing():
+            video_state = "Playing"
+        elif voice_client.is_paused():
+            video_state = "Paused"
+        else:
+            video_state = "Downloading"
 
-        header: str = f"{len(videos)} {member_pluralized}\n\n"
+        id_header: str = "ID"
+        title_header: str = "Title"
+        duration_header: str = "Duration"
 
-        highest_index_length: int = len(str(len(videos) + 1))
+        next_id: int = Video.ids[guild.id]
+        highest_id: int = next_id - 1
+        id_field_length: int = max(len(str(highest_id)), len(id_header))
 
-        name_lengths: Set[int] = {len(video.title) for video in videos}
-        highest_name_length: int = max(name_lengths)
+        title_lengths: Set[int] = {len(video.title) for video in videos}
+        title_field_length: int = max(*title_lengths, len(title_header))
 
-        events_data: List[str] = [(f"{str(i + 1).ljust(highest_index_length)}: " +
-                                   f"{video.title.ljust(highest_name_length)}")
-                                  for i, video in enumerate(videos)]
+        duration_lengths: Set[int] = {len(video.get_formatted_duration()) for video in videos}
+        duration_field_length: int = max(*duration_lengths, len(duration_header))
 
-        formatted_events: str = "\n".join(events_data)
+        current_video: Video = videos[0]
+        #current_video.get_formatted_remaining_duration
 
-        return format_code_block(header + formatted_events)
+        header: str = (f"{len(videos)} {member_pluralized} found\n" +
+                       f"Current video: {video_state}, {'avestruz'} remaining\n\n")
+
+        table_header: str = (f"{id_header.ljust(id_field_length)} | " +
+                             f"{title_header.ljust(title_field_length + 1)} | " +
+                             f"{duration_header.ljust(duration_field_length)}\n")
+
+        table_separator: str = f"{'-' * len(table_header)}\n"
+
+        videos_data: List[str] = [(f"{str(video.id).ljust(id_field_length)} | " +
+                                   f"{video.title.ljust(title_field_length)} | " +
+                                   f"{video.get_formatted_duration().rjust(duration_field_length)}")
+                                  for video in videos]
+
+        formatted_videos: str = "\n".join(videos_data)
+
+        return format_code_block(header + table_header + table_separator + formatted_videos)
 
 
 # ---------- Internal functions ---------- #
@@ -698,7 +728,7 @@ async def request_video_url(query: str) -> str:
     return video_url
 
 
-async def request_voice_client(author: discord.Member, guild: discord.Guild):
+async def request_voice_client(author: discord.Member, guild: discord.Guild) -> discord.VoiceClient:
     """ Request voice client for given guild and connect bot if it's not connected. """
     is_bot_in_channel: bool = guild.voice_client is not None
     if is_bot_in_channel:
@@ -707,6 +737,27 @@ async def request_voice_client(author: discord.Member, guild: discord.Guild):
         voice_client: discord.VoiceClient = await author.voice.channel.connect()
 
     return voice_client
+
+
+async def proceed_queue(guild: discord.Guild, is_skip=False) -> None:
+    """ Play given video and set callback for when it ends. """
+    queue: List[Video] = Video.get_queue(guild.id)
+
+    try:
+        if is_skip:
+            guild.voice_client.stop()
+            skipped_key: int = next(iter(queue))
+            del Video.queues[guild.id][skipped_key]
+        next_key: Video = next(iter(queue))
+        next_video: Video = queue[next_key]
+        await guild.voice_client.play(next_video.audio_source, after=lambda: proceed_queue(guild))
+    except StopIteration:
+        pass
+
+
+def get_current_time() -> List[int, int, int]:
+    """ Get current hours, minutes and seconds. """
+    return [int(num) for num in re.findall("\d+(?=[:.])", datetime.datetime.now().__str__())]
 
 
 # ---------- Interface ---------- #
@@ -887,7 +938,6 @@ async def cursed(message: discord.Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         return "You must be connected to a voice channel to use this command"
 
-    is_bot_in_channel: bool = message.guild.voice_client is not None
     voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
 
     filenames: List[str] = os.listdir(f"./{cursed_audios_dir}")
@@ -922,6 +972,7 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
 
         with youtube_dl.YoutubeDL() as ydl:
             video_data: Dict = ydl.extract_info(url, download=False)
+
         video_id: str = video_data["id"]
         video_title: str = video_data["title"]
         video_duration: int = int(video_data["duration"])
@@ -956,10 +1007,10 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
 
         audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path)
 
-        video: Video = Video(video_title, video_duration, message.guild, voice_client)
+        video: Video = Video(video_title, video_duration, message.guild, audio_source)
 
         if not voice_client.is_playing():
-            voice_client.play(audio_source)
+            await proceed_queue(message.guild)
 
 
 async def leave(message: discord.Message, parameters: List[str]) -> str:
@@ -1059,10 +1110,21 @@ async def skip(message: discord.Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         return "You must be connected to a voice channel to use this command"
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+    await proceed_queue(message.guild, is_skip=True)
 
-    # TODO skip to next video on queue
-    Video.clear_queue(message.guild.id)
+
+async def queue(message: discord.Message, parameters: List[str]) -> str:
+    """ Get current video queue. """
+    length: int = len(parameters)
+    required_length: int = 1
+
+    # Validate length
+    if length > required_length:
+        return "Too many parameters"
+
+    formatted_queue: str = Video.get_formatted_queue(message.guild)
+
+    return formatted_queue
 
 
 async def dice(message: discord.Message, parameters: List[str]) -> str:
@@ -1093,6 +1155,39 @@ async def dice(message: discord.Message, parameters: List[str]) -> str:
     return random_num
 
 
+async def wipe(message: discord.Message, parameters: List[str]) -> str:
+    """ Remove all messages sent within last given number of seconds. """
+    length: int = len(parameters)
+    required_length: int = 2
+
+    # Validate length
+    if length == 1:
+        return "No 'seconds' parameter was given"
+
+    if length > required_length:
+        return "Too many parameters"
+
+    # Validate number
+    total_seconds_str: str = parameters[1]
+    min_value: int = 1
+    max_value: int = 7200
+    is_max_num_valid: int = validate_number(total_seconds_str, min_value, max_value)
+
+    if not is_max_num_valid:
+        return ("Invalid seconds amount, it has to be an integer " +
+                f"between {min_value} and {max_value}")
+
+    message_amount: int = 0
+    total_seconds: int = int(total_seconds_str)
+
+    hours: int
+    minutes: int
+    seconds: int
+    hours, minutes, seconds = get_current_time()
+
+    return "I just wiped {message_amount} messages withing the last {total_seconds} seconds"
+
+
 # ---------- Application variables ---------- #
 
 # Async scheduler
@@ -1101,17 +1196,11 @@ loop: asyncio.ProactorEventLoop = asyncio.get_event_loop()
 # Tpose image srcs
 srcs: List[str] = request_tpose_srcs(max_page=3)
 
-# Youtube url for query
-youtube_url: str = "https://www.youtube.com/results?search_query=hohdsohdohfsa"
-
 # Restriction time
 min_seconds_amount: int = 1
 max_seconds_amount: int = 7200
 
-synthos_id: int = 517441496149131305
-
 # Map string to command object
-
 commands: Dict[str, Command] = {
     "help": Command(f"{prefix}help",
                     ("Provide brief description for all commands, " +
@@ -1180,9 +1269,15 @@ commands: Dict[str, Command] = {
     "skip": Command(f"{prefix}skip",
                     "Request me to skip current video",
                     f"\n{prefix}skip"),
+    "queue": Command(f"{prefix}queue",
+                    "Get current video queue",
+                    f"\n{prefix}queue"),
     "dice": Command(f"{prefix}dice",
                     "Roll a dice that returns a random value from 1 until given number",
-                    f"Roll a random number from 1 to 10\n{prefix}roll 10")
+                    f"Roll a random number from 1 to 10\n{prefix}roll 10"),
+    "wipe": Command(f"{prefix}wipe",
+                    "Remove all messages sent within last given number of seconds",
+                    f"Remove all messages sent within last 30 seconds\n{prefix}wipe 30")
 }
 
 # Specific messages to be replied
@@ -1216,7 +1311,9 @@ commands_map: Dict[str, Callable] = {
     f"{prefix}unpause": unpause,
     f"{prefix}stop": stop,
     f"{prefix}skip": skip,
-    f"{prefix}dice": dice
+    f"{prefix}queue": queue,
+    f"{prefix}dice": dice,
+    f"{prefix}wipe": wipe
 }
 
 event_classes: Set[ClassVar[RestrictEvent]] = {DeafEvent, MuteEvent}
@@ -1225,15 +1322,17 @@ voice_restrictions: Set[str] = {"deaf", "mute"}
 
 # ---------- Event listeners ---------- #
 
-# Bot connected
+# Bot connect
 @client.event
 async def on_connect():
     # Initialize data that requires connection
     RestrictEvent.events = {guild.id: {} for guild in client.guilds}
-    Video.queues = {guild.id: [] for guild in client.guilds}
 
     for subclass in RestrictEvent.__subclasses__():
         subclass.events = copy.deepcopy(RestrictEvent.events)
+
+    Video.queues = {guild.id: {} for guild in client.guilds}
+    Video.ids = {guild.id: 1 for guild in client.guilds}
 
 
 # Bot ready
@@ -1309,6 +1408,5 @@ async def on_member_remove(member: discord.Member):
         for event_class in event_classes:
             event_class.remove_guild(member.guild.id)
         Video.remove_queue(member.guild.id)
-
 
 client.run(token)

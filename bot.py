@@ -18,6 +18,7 @@ import os
 import random
 import re
 import requests
+import time
 import youtube_dl
 
 # ---------- Environment variables ---------- #
@@ -355,7 +356,7 @@ class Video:
 
         voice_client: discord.VoiceClient = guild.voice_client
 
-        member_pluralized: str = pluralize(len(videos), "video", "videos")
+        video_pluralized: str = pluralize(len(videos), "video", "videos")
         if voice_client.is_playing():
             video_state = "Playing"
         elif voice_client.is_paused():
@@ -380,11 +381,11 @@ class Video:
         current_video: Video = videos[0]
         #current_video.get_formatted_remaining_duration
 
-        header: str = (f"{len(videos)} {member_pluralized} found\n" +
+        header: str = (f"{len(videos)} {video_pluralized} found\n" +
                        f"Current video: {video_state}, {'avestruz'} remaining\n\n")
 
         table_header: str = (f"{id_header.ljust(id_field_length)} | " +
-                             f"{title_header.ljust(title_field_length + 1)} | " +
+                             f"{title_header.ljust(title_field_length)} | " +
                              f"{duration_header.ljust(duration_field_length)}\n")
 
         table_separator: str = f"{'-' * len(table_header)}\n"
@@ -401,9 +402,9 @@ class Video:
 
 # ---------- Internal functions ---------- #
 
-def pluralize(value: int, singular: str, plural: str) -> str:
+def pluralize(length: int, singular: str, plural: str) -> str:
     """ Decide between singular or plural version of a message. """
-    return singular if value <= 1 else plural
+    return singular if length == 1 else plural
 
 
 def extract_id(s: str) -> int:
@@ -750,15 +751,14 @@ async def proceed_queue(guild: discord.Guild, is_skip=False) -> None:
             del Video.queues[guild.id][skipped_key]
         next_key: Video = next(iter(queue))
         next_video: Video = queue[next_key]
-        await guild.voice_client.play(next_video.audio_source, after=lambda: proceed_queue(guild))
+        guild.voice_client.play(next_video.audio_source, after=lambda: proceed_queue(guild))
     except StopIteration:
         pass
 
 
-def get_current_time() -> List[int, int, int]:
-    """ Get current hours, minutes and seconds. """
-    return [int(num) for num in re.findall("\d+(?=[:.])", datetime.datetime.now().__str__())]
-
+def get_current_datetime() -> datetime.datetime:
+    """ Request current UTC time and get datetime object from it. """
+    return datetime.datetime.fromtimestamp(time.time() - 35) + datetime.timedelta(hours=3)
 
 # ---------- Interface ---------- #
 
@@ -971,7 +971,7 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
         url: str = query if is_query_url else await request_video_url(query)
 
         with youtube_dl.YoutubeDL() as ydl:
-            video_data: Dict = ydl.extract_info(url, download=False)
+            video_data: Dict = ydl.extract_info(url, download=False) # TODO: REPLACE SYNC BLOCKING BAD
 
         video_id: str = video_data["id"]
         video_title: str = video_data["title"]
@@ -997,7 +997,7 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
 
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                 os.chdir(f"./{download_path_dir}")
-                ydl.download([url])
+                ydl.download([url]) # TODO: REPLACE SYNC BLOCKING EXTREMELY BAD
                 os.chdir("..")
 
             filenames: Generator[str] = (filename for filename in os.listdir(download_path_dir))
@@ -1177,15 +1177,21 @@ async def wipe(message: discord.Message, parameters: List[str]) -> str:
         return ("Invalid seconds amount, it has to be an integer " +
                 f"between {min_value} and {max_value}")
 
-    message_amount: int = 0
     total_seconds: int = int(total_seconds_str)
 
-    hours: int
-    minutes: int
-    seconds: int
-    hours, minutes, seconds = get_current_time()
+    now: datetime.datetime = get_current_datetime()
+    date: datetime.datetime = now - datetime.timedelta(seconds=total_seconds)
+    message_amount: int = 0
 
-    return "I just wiped {message_amount} messages withing the last {total_seconds} seconds"
+    async for recent_message in message.channel.history(after=date, oldest_first=False):
+        await recent_message.delete()
+        message_amount += 1
+
+    message_pluralized: str = pluralize(message_amount, "message", "messages")
+    seconds_pluralized: str = pluralize(total_seconds, "second", "seconds")
+
+    return (f"I just wiped {message_amount} {message_pluralized} " +
+            f"sent within the last {total_seconds} {seconds_pluralized}")
 
 
 # ---------- Application variables ---------- #
@@ -1195,10 +1201,6 @@ loop: asyncio.ProactorEventLoop = asyncio.get_event_loop()
 
 # Tpose image srcs
 srcs: List[str] = request_tpose_srcs(max_page=3)
-
-# Restriction time
-min_seconds_amount: int = 1
-max_seconds_amount: int = 7200
 
 # Map string to command object
 commands: Dict[str, Command] = {
@@ -1286,7 +1288,8 @@ special_messages: Dict[str, Callable] = {
     "ninguem": lambda: "pediu",
     "ok": lambda: "boomer",
     "comedores de": lambda: "coc\u00f4",
-    "oi": lambda: "oi"
+    "oi": lambda: "oi",
+    "que": lambda: "ijo"
 }
 
 commands_map: Dict[str, Callable] = {

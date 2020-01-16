@@ -37,12 +37,14 @@ bad_words_path: str = "./bad-words.txt"
 extra_srcs_path: str = "./extra-srcs.txt"
 report_path: str = "./reports.txt"
 
-youtube_videos_dir: str = "youtube-videos"
+youtube_videos_info_dir: str = "youtube-videos-info"
+youtube_videos_source_dir: str = "youtube-videos-source"
 cursed_audios_dir: str = "cursed-audios"
 download_path_dir: str = "download-path"
 
 dirnames: List[str] = [
-    youtube_videos_dir,
+    youtube_videos_info_dir,
+    youtube_videos_source_dir,
     cursed_audios_dir,
     download_path_dir,
 ]
@@ -90,6 +92,7 @@ def format_code_block(text: str) -> str:
 
 class Command:
     """ Describe a command available from bot. """
+
     def __init__(self, name: str, description: str, example: str):
         self.name = name
         self.description = description
@@ -162,7 +165,7 @@ class RestrictEvent(ABC):
         del cls.events[guild_id]
 
     @classmethod
-    def verify_guild(cls, guild_id: int) -> bool:
+    def check_guild(cls, guild_id: int) -> bool:
         """ Verify if events dict has guild by id. """
         return guild_id in cls.events
 
@@ -182,7 +185,7 @@ class RestrictEvent(ABC):
         del cls.events[guild_id][event_id]
 
     @classmethod
-    def verify_event(cls, guild_id: int, event_id: int) -> bool:
+    def check_event(cls, guild_id: int, event_id: int) -> bool:
         """ Verify if event guild dict has member by id. """
         return event_id in cls.events[guild_id]
 
@@ -293,8 +296,12 @@ class Video:
     queues: Dict[int, Dict[int, Video]] = {}
 
     def __init__(self, title: str, duration: int, guild: discord.Guild, audio_source: discord.FFmpegPCMAudio):
+
+        partial_title: str = title if len(title) <= 50 else f"{title[: 47]}..."
+
         self.id: int = Video.ids[guild.id]
-        self.title: str = title if len(title) <= 50 else f"{title[: 47]}..."
+        self.partial_title: str = partial_title
+        self.title: str = title
         self.duration: int = duration
         self.guild: discord.Guild = guild
         self.audio_source: discord.FFmpegPCMAudio = audio_source
@@ -337,9 +344,26 @@ class Video:
         cls.queues[guild_id][video.id] = video
 
     @classmethod
-    def remove_video(cls, guild_id: int) -> None:
+    def check_video(cls, guild_id: int, video_id: int) -> bool:
+        """ Verify if video exists in video dict. """
+        return video_id in cls.queues[guild_id]
+
+    @classmethod
+    def remove_video(cls, guild_id: int, video_id: int) -> None:
         """ Remove video from video dict. """
-        del cls.queues[guild_id][guild_id]
+        del cls.queues[guild_id][video_id]
+
+    @classmethod
+    def remove_next_video(cls, guild_id: int) -> None:
+        """ Remove video from video dict. """
+        next_video_id: int = next(iter(cls.queues[guild_id]))
+        cls.remove_video(guild_id, next_video_id)
+
+    @classmethod
+    def get_next_video(cls, guild_id: int) -> Video:
+        """ Remove video from video dict. """
+        next_key: int = next(iter(cls.queues[guild_id]))
+        return cls.queues[guild_id][next_key]
 
     @classmethod
     def get_videos(cls, guild_id: int) -> ValuesView[Video]:
@@ -372,14 +396,16 @@ class Video:
         highest_id: int = next_id - 1
         id_field_length: int = max(len(str(highest_id)), len(id_header))
 
-        title_lengths: Set[int] = {len(video.title) for video in videos}
+        title_lengths: Set[int] = {len(video.partial_title) for video in videos}
         title_field_length: int = max(*title_lengths, len(title_header))
+        print({len(video.title) for video in videos})
+        print(title_field_length)
 
         duration_lengths: Set[int] = {len(video.get_formatted_duration()) for video in videos}
         duration_field_length: int = max(*duration_lengths, len(duration_header))
 
         current_video: Video = videos[0]
-        #current_video.get_formatted_remaining_duration
+        # current_video.get_formatted_remaining_duration
 
         header: str = (f"{len(videos)} {video_pluralized} found\n" +
                        f"Current video: {video_state}, {'avestruz'} remaining\n\n")
@@ -391,7 +417,7 @@ class Video:
         table_separator: str = f"{'-' * len(table_header)}\n"
 
         videos_data: List[str] = [(f"{str(video.id).ljust(id_field_length)} | " +
-                                   f"{video.title.ljust(title_field_length)} | " +
+                                   f"{video.partial_title.ljust(title_field_length)} | " +
                                    f"{video.get_formatted_duration().rjust(duration_field_length)}")
                                   for video in videos]
 
@@ -557,12 +583,12 @@ async def restrict(message: discord.Message,
 
     # Unrestrict if still restricted
     guild_id: int = message.guild.id
-    is_restricted: bool = restrict_event_class.verify_event(guild_id, member.id)
+    is_restricted: bool = restrict_event_class.check_event(guild_id, member.id)
     if is_restricted:
         kwarg_disable: Dict[str, Any] = restrict_event.get_kwarg_disable()
         await member.edit(**kwarg_disable)
 
-        event_exists: bool = restrict_event_class.verify_event(guild_id, member.id)
+        event_exists: bool = restrict_event_class.check_event(guild_id, member.id)
         if event_exists:
             restrict_event_class.remove_event(guild_id, member.id)
 
@@ -606,13 +632,13 @@ async def unrestrict(message: discord.Message,
 
     # Unrestrict if still restricted
     guild_id: int = message.guild.id
-    is_restricted: bool = restrict_event_class.verify_event(guild_id, member.id)
+    is_restricted: bool = restrict_event_class.check_event(guild_id, member.id)
     if is_restricted:
         restrict_event: RestrictEvent = restrict_event_class.get_event(guild_id, member.id)
         kwarg_disable: Dict[str, Any] = restrict_event.get_kwarg_disable()
         await member.edit(**kwarg_disable)
 
-        event_exists: bool = restrict_event_class.verify_event(guild_id, member.id)
+        event_exists: bool = restrict_event_class.check_event(guild_id, member.id)
         if event_exists:
             restrict_event_class.remove_event(guild_id, member.id)
     else:
@@ -740,18 +766,17 @@ async def request_voice_client(author: discord.Member, guild: discord.Guild) -> 
     return voice_client
 
 
-async def proceed_queue(guild: discord.Guild, is_skip=False) -> None:
-    """ Play given video and set callback for when it ends. """
-    queue: List[Video] = Video.get_queue(guild.id)
+def proceed_queue(guild: discord.Guild, is_skip=False) -> None:
+    """ Handle video deletion. """
+    queue: Dict[int, Video] = Video.get_queue(guild.id)
 
     try:
         if is_skip:
+            Video.remove_next_video(guild.id)
             guild.voice_client.stop()
-            skipped_key: int = next(iter(queue))
-            del Video.queues[guild.id][skipped_key]
-        next_key: Video = next(iter(queue))
-        next_video: Video = queue[next_key]
-        guild.voice_client.play(next_video.audio_source, after=lambda: proceed_queue(guild))
+        next_video: Video = Video.get_next_video(guild.id)
+        if not guild.voice_client.is_playing():
+            guild.voice_client.play(next_video.audio_source, after=lambda e: proceed_queue(guild, is_skip=True))
     except StopIteration:
         pass
 
@@ -759,6 +784,20 @@ async def proceed_queue(guild: discord.Guild, is_skip=False) -> None:
 def get_current_datetime() -> datetime.datetime:
     """ Request current UTC time and get datetime object from it. """
     return datetime.datetime.fromtimestamp(time.time() - 35) + datetime.timedelta(hours=3)
+
+
+def reduce_code_block_length(s: str, target_amount: int) -> str:
+    """ Get reduced string based on how much space characters use on code blocks rather than raw length. """
+    reduced_amount: int = 0
+
+    while reduced_amount < target_amount:
+        last_char: str = s[-1]
+        is_char_big: bool = ord(last_char) in big_char_codes
+        s = s[: -1]
+        reduced_amount += 2 if is_char_big else 1
+
+    return s
+
 
 # ---------- Interface ---------- #
 
@@ -958,10 +997,10 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         return "You must be connected to a voice channel to use this command"
 
+    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+
     has_query: bool = length > 1
     query: str = " ".join(parameters[1:]) if has_query else None
-
-    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
 
     # Search for a video if query was given
     if query is not None:
@@ -970,20 +1009,32 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
         is_query_url: bool = re.search(youtube_video_regex, query) is not None
         url: str = query if is_query_url else await request_video_url(query)
 
-        with youtube_dl.YoutubeDL() as ydl:
-            video_data: Dict = ydl.extract_info(url, download=False) # TODO: REPLACE SYNC BLOCKING BAD
+        video_id: str = re.search("(?<=v=)[\w\-]{11}", url)[0]
 
-        video_id: str = video_data["id"]
-        video_title: str = video_data["title"]
-        video_duration: int = int(video_data["duration"])
+        info_file_path: str = f"./{youtube_videos_info_dir}/{video_id}"
+        info_file_exists: bool = os.path.exists(info_file_path)
+
+        if info_file_exists:
+            with open(info_file_path) as file:
+                file_content: str = file.read()
+                video_info: Dict = json.loads(file_content)
+        else:
+            with youtube_dl.YoutubeDL() as ydl:
+                video_info: Dict = ydl.extract_info(url, download=False)  # TODO: REPLACE SYNC BLOCKING BAD
+            with open(info_file_path, "w") as file:
+                video_info_str: str = json.dumps(video_info, indent=4)
+                file.write(video_info_str)
+
+        video_title: str = video_info["title"]
+        video_duration: int = int(video_info["duration"])
 
         if video_duration > 3600:
             return "This video is too large"
 
-        file_path: str = f"./{youtube_videos_dir}/{video_id}"
-        file_exists: bool = os.path.exists(file_path)
+        source_file_path: str = f"./{youtube_videos_source_dir}/{video_id}"
+        source_file_exists: bool = os.path.exists(source_file_path)
 
-        if not file_exists:
+        if not source_file_exists:
             await message.channel.send("Downloading...")
 
             ydl_opts = {
@@ -997,20 +1048,19 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
 
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                 os.chdir(f"./{download_path_dir}")
-                ydl.download([url]) # TODO: REPLACE SYNC BLOCKING EXTREMELY BAD
+                ydl.download([url])  # TODO: REPLACE SYNC BLOCKING EXTREMELY BAD
                 os.chdir("..")
 
             filenames: Generator[str] = (filename for filename in os.listdir(download_path_dir))
             filename: str = next(filename for filename in filenames
                                  if filename.find(f"-{video_id}") > -1)
-            os.rename(f"./{download_path_dir}/{filename}", file_path)
+            os.rename(f"./{download_path_dir}/{filename}", source_file_path)
 
-        audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path)
+        audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(source_file_path)
 
         video: Video = Video(video_title, video_duration, message.guild, audio_source)
 
-        if not voice_client.is_playing():
-            await proceed_queue(message.guild)
+        proceed_queue(message.guild)
 
 
 async def leave(message: discord.Message, parameters: List[str]) -> str:
@@ -1110,7 +1160,12 @@ async def skip(message: discord.Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         return "You must be connected to a voice channel to use this command"
 
-    await proceed_queue(message.guild, is_skip=True)
+    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+
+    if voice_client.is_playing():
+        message.guild.voice_client.stop()
+    else:
+        return "There are no video to skip"
 
 
 async def queue(message: discord.Message, parameters: List[str]) -> str:
@@ -1202,6 +1257,9 @@ loop: asyncio.ProactorEventLoop = asyncio.get_event_loop()
 # Tpose image srcs
 srcs: List[str] = request_tpose_srcs(max_page=3)
 
+# Char code for chars that become bigger in code blocks
+big_char_codes: Set[str] = {12302, 12303}
+
 # Map string to command object
 commands: Dict[str, Command] = {
     "help": Command(f"{prefix}help",
@@ -1272,8 +1330,8 @@ commands: Dict[str, Command] = {
                     "Request me to skip current video",
                     f"\n{prefix}skip"),
     "queue": Command(f"{prefix}queue",
-                    "Get current video queue",
-                    f"\n{prefix}queue"),
+                     "Get current video queue",
+                     f"\n{prefix}queue"),
     "dice": Command(f"{prefix}dice",
                     "Roll a dice that returns a random value from 1 until given number",
                     f"Roll a random number from 1 to 10\n{prefix}roll 10"),
@@ -1365,12 +1423,12 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
     # Remove dict element on unmute
     if was_unmuted:
-        if MuteEvent.verify_event(guild_id, member.id):
+        if MuteEvent.check_event(guild_id, member.id):
             MuteEvent.remove_event(guild_id, member.id)
 
     # Remove dict element on undeaf
     if was_undeafen:
-        if DeafEvent.verify_event(guild_id, member.id):
+        if DeafEvent.check_event(guild_id, member.id):
             DeafEvent.remove_event(guild_id, member.id)
 
 
@@ -1381,7 +1439,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
     # Abort amputate event if roles are changed
     if were_roles_changed:
-        is_amputated: bool = AmputateEvent.verify_event(after.guild.id, after.id)
+        is_amputated: bool = AmputateEvent.check_event(after.guild.id, after.id)
         if is_amputated:
             amputate_event: AmputateEvent = AmputateEvent.get_event(after.guild.id, after.id)
             happened_recently: bool = amputate_event.get_recent_state()
@@ -1392,7 +1450,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 # Member join guild
 @client.event
 async def on_guild_join(guild: discord.Guild):
-    was_bot_added: bool = not MuteEvent.verify_guild(guild.id)
+    was_bot_added: bool = not MuteEvent.check_guild(guild.id)
 
     # Add guild dict
     if was_bot_added:
@@ -1411,5 +1469,6 @@ async def on_member_remove(member: discord.Member):
         for event_class in event_classes:
             event_class.remove_guild(member.guild.id)
         Video.remove_queue(member.guild.id)
+
 
 client.run(token)

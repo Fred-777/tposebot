@@ -1020,7 +1020,9 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
                 video_info: Dict = json.loads(file_content)
         else:
             with youtube_dl.YoutubeDL() as ydl:
-                video_info: Dict = ydl.extract_info(url, download=False)  # TODO: REPLACE SYNC BLOCKING BAD
+                video_info: Dict = await loop.run_in_executor(None,
+                                                              lambda: ydl.extract_info(url,
+                                                                                       download=False))
             with open(info_file_path, "w") as file:
                 video_info_str: str = json.dumps(video_info, indent=4)
                 file.write(video_info_str)
@@ -1048,7 +1050,8 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
 
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                 os.chdir(f"./{download_path_dir}")
-                ydl.download([url])  # TODO: REPLACE SYNC BLOCKING EXTREMELY BAD
+                await loop.run_in_executor(None,
+                                           lambda: ydl.download([url]))
                 os.chdir("..")
 
             filenames: Generator[str] = (filename for filename in os.listdir(download_path_dir))

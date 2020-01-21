@@ -334,6 +334,11 @@ class Video:
         return cls.queues[guild_id]
 
     @classmethod
+    def set_queue(cls, guild_id: int, queue: Dict[int, Video]) -> None:
+        """ Get video dict from guild dict. """
+        cls.queues[guild_id] = queue
+
+    @classmethod
     def clear_queue(cls, guild_id: int) -> None:
         """ Clear video dict for a guild. """
         cls.queues[guild_id] = {}
@@ -398,8 +403,6 @@ class Video:
 
         title_lengths: Set[int] = {len(video.partial_title) for video in videos}
         title_field_length: int = max(*title_lengths, len(title_header))
-        print({len(video.title) for video in videos})
-        print(title_field_length)
 
         duration_lengths: Set[int] = {len(video.get_formatted_duration()) for video in videos}
         duration_field_length: int = max(*duration_lengths, len(duration_header))
@@ -408,7 +411,7 @@ class Video:
         # current_video.get_formatted_remaining_duration
 
         header: str = (f"{len(videos)} {video_pluralized} found\n" +
-                       f"Current video: {video_state}, {'avestruz'} remaining\n\n")
+                       f"Current video: {video_state}   , {'avestruz'} remaining\n\n")
 
         table_header: str = (f"{id_header.ljust(id_field_length)} | " +
                              f"{title_header.ljust(title_field_length)} | " +
@@ -421,9 +424,26 @@ class Video:
                                    f"{video.get_formatted_duration().rjust(duration_field_length)}")
                                   for video in videos]
 
+        # Current video pointer arrow
+        videos_data[0] += " <-- "
+
         formatted_videos: str = "\n".join(videos_data)
 
         return format_code_block(header + table_header + table_separator + formatted_videos)
+
+
+# ---------- Exceptions ---------- #
+
+class TooManyParametersException(Exception):
+    """ Exception triggered when a command receives more parameters than expected. """
+    pass
+
+
+class NoPermissionException(Exception):
+    """ Exception triggered when a user requests an action which he doesn't have permission to execute. """
+    def __init__(self, user_mention: str, action_name: str):
+        self.user_mention: str = user_mention
+        self.action_name: str = action_name
 
 
 # ---------- Internal functions ---------- #
@@ -515,6 +535,17 @@ def replace_bad_words(s: str) -> Tuple[str, int]:
     return s, bad_word_amount
 
 
+def check_permissions(author: discord.Member, function_role: Callable) -> bool:
+    """ Inform if author has permission to perform a given action. """
+    roles: List[discord.Role] = author.roles
+    role_has_permission: bool = any([function_role(role) for role in roles])
+    is_admin: bool = any([role.permissions.administrator for role in roles])
+    is_owner: bool = author.id == author.guild.owner_id
+    has_permission: bool = role_has_permission or is_admin or is_owner
+
+    return has_permission
+
+
 async def restrict(message: discord.Message,
                    parameters: List[str],
                    restrict_event_class: ClassVar[RestrictEvent]) -> str:
@@ -528,7 +559,7 @@ async def restrict(message: discord.Message,
     if length == 2:
         return "No 'seconds' parameter was given"
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     member_name: str = parameters[1]
     member_id: int = extract_id(member_name)
@@ -540,16 +571,12 @@ async def restrict(message: discord.Message,
         return "Target user must be highlighted"
 
     # Validate author permissions
+    author: discord.Member = message.author
     function_role: Callable = restrict_event_class.function_role
-
-    roles: List[discord.Role] = message.author.roles
-    role_has_permission: bool = any([function_role(role) for role in roles])
-    is_admin: bool = any([role.permissions.administrator for role in roles])
-    is_owner: bool = message.author.id == message.guild.owner_id
-    has_permission: bool = role_has_permission or is_admin or is_owner
+    has_permission: bool = check_permissions(author, function_role)
 
     if not has_permission:
-        return f"User '{message.author.mention}' doesn't have permission to {restrict_event_class.name_present}"
+        raise NoPermissionException(author.mention, restrict_event_class.name_present)
 
     # Get member
     members: List[discord.Member] = [member for member in message.guild.members]
@@ -604,7 +631,7 @@ async def unrestrict(message: discord.Message,
     if length == 1:
         return "No 'member' parameter was given"
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     member_name: str = parameters[1]
     member_id: int = extract_id(member_name)
@@ -615,16 +642,12 @@ async def unrestrict(message: discord.Message,
         return "Target user must be highlighted"
 
     # Validate author permissions
+    author: discord.Member = message.author
     function_role: Callable = restrict_event_class.function_role
-
-    roles: List[discord.Role] = message.author.roles
-    role_has_permission: bool = any([function_role(role) for role in roles])
-    is_admin: bool = any([role.permissions.administrator for role in roles])
-    is_owner: bool = message.author.id == message.guild.owner_id
-    has_permission: bool = role_has_permission or is_admin or is_owner
+    has_permission: bool = check_permissions(author, function_role)
 
     if not has_permission:
-        return f"User '{message.author.name}' doesn't have permission to {restrict_event_class.name_present}"
+        raise NoPermissionException(author.mention, restrict_event_class.name_present)
 
     # Get member
     members: List[discord.Member] = [member for member in message.guild.members]
@@ -654,7 +677,7 @@ async def restrictionlist(message: discord.Message,
 
     # Validate length
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     return restrict_event_class.get_formatted_list(message.guild.id)
 
@@ -781,22 +804,18 @@ def proceed_queue(guild: discord.Guild, is_skip=False) -> None:
         pass
 
 
+def shuffle_dict(d: Dict[int, Any]) -> Dict[int, Any]:
+    """ Shuffle a given dict. """
+    keys: List[int] = list(d.keys())
+    random.shuffle(keys)
+    shuffled_d: Dict[int, Any] = {key: d[key] for key in keys}
+
+    return shuffled_d
+
+
 def get_current_datetime() -> datetime.datetime:
     """ Request current UTC time and get datetime object from it. """
     return datetime.datetime.fromtimestamp(time.time() - 35) + datetime.timedelta(hours=3)
-
-
-def reduce_code_block_length(s: str, target_amount: int) -> str:
-    """ Get reduced string based on how much space characters use on code blocks rather than raw length. """
-    reduced_amount: int = 0
-
-    while reduced_amount < target_amount:
-        last_char: str = s[-1]
-        is_char_big: bool = ord(last_char) in big_char_codes
-        s = s[: -1]
-        reduced_amount += 2 if is_char_big else 1
-
-    return s
 
 
 # ---------- Interface ---------- #
@@ -815,7 +834,7 @@ def get_help(parameters: List[str]) -> str:
     is_command_help: bool = length == 2
 
     if length > max_required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     # General help
     if is_general_help:
@@ -841,7 +860,7 @@ async def code(message: discord.Message, parameters: List[str]) -> None:
     required_length: int = 1
 
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     code_file: discord.File = discord.File("./bot.py")
     await message.channel.send(file=code_file)
@@ -935,7 +954,7 @@ async def serverlist(message: discord.Message, parameters: List[str]) -> str:
 
     # Validate length
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     guilds: List[discord.Guild] = sorted(client.guilds, key=lambda guild: guild.name)
     header: str = f"{len(guilds)} servers found\n\n"
@@ -958,7 +977,7 @@ async def tpose(message: discord.Message, parameters: List[str]) -> str:
 
     # Validate length
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     src: str = random.choice(srcs)
 
@@ -971,7 +990,7 @@ async def cursed(message: discord.Message, parameters: List[str]) -> str:
     required_length: int = 1
 
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1037,7 +1056,7 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
         source_file_exists: bool = os.path.exists(source_file_path)
 
         if not source_file_exists:
-            await message.channel.send("Downloading...")
+            await message.channel.send(f"Downloading {video_title}...")
 
             ydl_opts = {
                 "postprocessors": [
@@ -1062,8 +1081,9 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
         audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(source_file_path)
 
         video: Video = Video(video_title, video_duration, message.guild, audio_source)
-
         proceed_queue(message.guild)
+
+        return f"Just queued {video.title}"
 
 
 async def leave(message: discord.Message, parameters: List[str]) -> str:
@@ -1073,7 +1093,7 @@ async def leave(message: discord.Message, parameters: List[str]) -> str:
 
     # Validate length
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1096,7 +1116,7 @@ async def pause(message: discord.Message, parameters: List[str]) -> str:
 
     # Validate length
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1117,7 +1137,7 @@ async def unpause(message: discord.Message, parameters: List[str]) -> str:
 
     # Validate length
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1138,7 +1158,7 @@ async def stop(message: discord.Message, parameters: List[str]) -> str:
 
     # Validate length
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1157,7 +1177,7 @@ async def skip(message: discord.Message, parameters: List[str]) -> str:
 
     # Validate length
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1171,6 +1191,30 @@ async def skip(message: discord.Message, parameters: List[str]) -> str:
         return "There are no video to skip"
 
 
+async def shuffle(message: discord.Message, parameters: List[str]) -> str:
+    """ Shuffle videos in queue. """
+    length: int = len(parameters)
+    required_length: int = 1
+
+    # Validate length
+    if length > required_length:
+        raise TooManyParametersException()
+
+    queue: Dict[int, Video] = Video.get_queue(message.guild.id)
+    current_key: int = next(iter(queue))
+    next_videos: Dict[int, Video] = {key: value for key, value in queue.items() if key != current_key}
+
+    if len(next_videos) < 2:
+        return "The queue must have 2 or more non-current videos to be shuffable"
+
+    current_video: Video = queue[current_key]
+    shuffled_next_videos: Dict[int, Video] = shuffle_dict(next_videos)
+    shuffled_queue: Dict[int, Video] = {current_key: current_video, **shuffled_next_videos}
+
+    Video.set_queue(message.guild.id, shuffled_queue)
+    return "Queue just got shuffled"
+
+
 async def queue(message: discord.Message, parameters: List[str]) -> str:
     """ Get current video queue. """
     length: int = len(parameters)
@@ -1178,7 +1222,7 @@ async def queue(message: discord.Message, parameters: List[str]) -> str:
 
     # Validate length
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     formatted_queue: str = Video.get_formatted_queue(message.guild)
 
@@ -1195,7 +1239,7 @@ async def dice(message: discord.Message, parameters: List[str]) -> str:
         return "No 'max number' parameter was given"
 
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
 
     # Validate number
     max_num_str: str = parameters[1]
@@ -1223,7 +1267,16 @@ async def wipe(message: discord.Message, parameters: List[str]) -> str:
         return "No 'seconds' parameter was given"
 
     if length > required_length:
-        return "Too many parameters"
+        raise TooManyParametersException()
+
+    # Validate author permissions
+    author: discord.Member = message.author
+    function_role: Callable = lambda role: role.permissions.manage_messages
+    has_permission: bool = check_permissions(author, function_role)
+
+    if not has_permission:
+        action_name: str = "wipe"
+        raise NoPermissionException(author.mention, action_name)
 
     # Validate number
     total_seconds_str: str = parameters[1]
@@ -1332,6 +1385,9 @@ commands: Dict[str, Command] = {
     "skip": Command(f"{prefix}skip",
                     "Request me to skip current video",
                     f"\n{prefix}skip"),
+    "shuffle": Command(f"{prefix}shuffle",
+                       "Randomly shuffle videos in queue",
+                       f"\n{prefix}shuffle"),
     "queue": Command(f"{prefix}queue",
                      "Get current video queue",
                      f"\n{prefix}queue"),
@@ -1375,6 +1431,7 @@ commands_map: Dict[str, Callable] = {
     f"{prefix}unpause": unpause,
     f"{prefix}stop": stop,
     f"{prefix}skip": skip,
+    f"{prefix}shuffle": shuffle,
     f"{prefix}queue": queue,
     f"{prefix}dice": dice,
     f"{prefix}wipe": wipe
@@ -1409,9 +1466,14 @@ async def on_ready():
 @client.event
 async def on_message(message: discord.Message):
     try:
+        channel: discord.TextChannel = message.channel
         reply: str = await process_message(message)
         if reply is not None:
             await message.channel.send(reply)
+    except TooManyParametersException as e:
+        await channel.send(f"Too many parameters")
+    except NoPermissionException as e:
+        await channel.send(f"User {e.user_mention} doesn't have permission to {e.action_name}")
     except UnicodeEncodeError:
         pass
 
@@ -1440,7 +1502,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 async def on_member_update(before: discord.Member, after: discord.Member):
     were_roles_changed: bool = before.roles is not after.roles
 
-    # Abort amputate event if roles are changed
+    # Abort amputate event if roles changed
     if were_roles_changed:
         is_amputated: bool = AmputateEvent.check_event(after.guild.id, after.id)
         if is_amputated:

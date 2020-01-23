@@ -12,7 +12,6 @@ import copy
 import datetime
 import discord
 import dotenv
-import glob
 import json
 import os
 import random
@@ -715,7 +714,7 @@ async def process_message(message: discord.Message) -> str:
 
         # Handle special messages
         content_lower: str = message.content.lower()
-        key: str = next((key for key in special_messages if content_lower.startswith(key)), None)
+        key: str = next((key for key in special_messages if content_lower.startswith(f"{key} ")), None)
         is_special: bool = key is not None
         if is_special:
             special_message: str = special_messages[key]()
@@ -1527,7 +1526,6 @@ commands_map: Dict[str, Callable] = {
     f"{prefix}wipe": wipe
 }
 
-event_classes: Set[ClassVar[RestrictEvent]] = {DeafEvent, MuteEvent}
 voice_restrictions: Set[str] = {"deaf", "mute"}
 
 
@@ -1614,9 +1612,15 @@ async def on_guild_join(guild: discord.Guild):
 
     # Add guild dict
     if was_bot_added:
-        for event_class in event_classes:
+        for event_class in RestrictEvent.__subclasses__():
             event_class.add_guild(guild.id)
+
         Video.add_queue(guild.id)
+        Video.queues[guild.id] = {}
+        Video.ids[guild.id] = 1
+        Video.last_video_plays[guild.id] = 0.0
+        Video.last_video_pauses[guild.id] = 0.0
+        Video.last_video_remaining_durations[guild.id] = 0.0
 
 
 # Member leave guild
@@ -1626,9 +1630,16 @@ async def on_member_remove(member: discord.Member):
 
     # Remove guild dict
     if was_bot_removed:
-        for event_class in event_classes:
+        for event_class in RestrictEvent.__subclasses__():
             event_class.remove_guild(member.guild.id)
-        Video.remove_queue(member.guild.id)
+        guild: discord.Guild = member.guild
+
+        Video.remove_queue(guild.id)
+        del Video.queues[guild.id]
+        del Video.ids[guild.id]
+        del Video.last_video_plays[guild.id]
+        del Video.last_video_pauses[guild.id]
+        del Video.last_video_remaining_durations[guild.id]
 
 
 client.run(token)

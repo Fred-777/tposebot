@@ -13,6 +13,7 @@ import datetime
 import discord
 import dotenv
 import json
+import librosa
 import os
 import random
 import re
@@ -51,6 +52,20 @@ for dirname in dirnames:
     if not file_exists:
         os.mkdir(dirname)
 
+
+# ---------- Text formatting ---------- #
+
+
+def format_bold_text(text: str) -> str:
+    """ Format text to become bold. """
+    return f"**{text}**"
+
+
+def format_code_block(text: str) -> str:
+    """ Format text to become multiline code block. """
+    return f"```{text}```"
+
+
 # ---------- Load environment ---------- #
 
 with open(bad_words_path) as file:
@@ -65,16 +80,18 @@ with open(report_path) as file:
     data: str = file.read()
     reports: Set[str] = set(json.loads(data))
 
+
 # ---------- Class helpers ---------- #
 
+
+def suggest_help() -> str:
+    """ Simple introduction to be performed when bot is highlighted. """
+    return f"Type {prefix}help for more info"
+
+
 bot_id: int = 647954736959717416
-game: discord.Game = discord.Game("Despacito 2")
+game: discord.Game = discord.Game(suggest_help())
 client: discord.Client = discord.Client(activity=game)
-
-
-def format_code_block(text: str) -> str:
-    """ Format text to multiline code block. """
-    return f"```{text}```"
 
 
 # ---------- Classes ---------- #
@@ -187,7 +204,7 @@ class RestrictEvent(ABC):
     def get_formatted_list(cls, guild_id: int) -> str:
         """ Get formatted list of running mute events in a guild. """
         events: List[RestrictEvent] = sorted(cls.get_events(guild_id),
-                                             key=lambda event: event.member.name)
+                                             key=lambda event: event.member.name.lower())
         if len(events) == 0:
             return f"There are no {cls.name_past} users"
 
@@ -294,7 +311,7 @@ class Video:
     def __init__(self, title: str, duration: int, guild: discord.Guild, audio_source: discord.FFmpegPCMAudio):
 
         for char_code in big_char_codes:
-            char = chr(char_code)
+            char: str = chr(char_code)
             title = title.replace(char, " ")
         partial_title: str = title if len(title) <= 50 else f"{title[: 47]}..."
 
@@ -308,27 +325,47 @@ class Video:
         Video.ids[guild.id] += 1
         Video.add_video(guild.id, self)
 
-    def get_formatted_duration(self) -> str:
+    def get_formatted_duration(self, justify=False) -> str:
         """ Get formatted representation of duration. """
-        return get_formatted_duration(self.duration)
+        return get_formatted_duration(self.duration, justify=justify)
 
     @classmethod
-    def get_formatted_remaining_duration(cls, guild: discord.Guild) -> str:
-        """ Get formatted representation of remaining duration for current video in guild. """
+    def get_remaining_duration(cls, guild: discord.Guild) -> int:
+        """ Get remaining duration for current video. """
         last_video_play: float = Video.last_video_plays[guild.id]
         last_video_pause: float = Video.last_video_pauses[guild.id]
         last_video_remaining_duration: int = Video.last_video_remaining_durations[guild.id]
 
         current_time: float = time.time()
-        last_time: float = max(last_video_play, last_video_pause)
-        time_passed: float = current_time - last_time
+        last_pause_or_play: float = max(last_video_play, last_video_pause)
+        time_passed: float = current_time - last_pause_or_play
 
         if guild.voice_client.is_playing():
             remaining_duration: int = int(last_video_remaining_duration - time_passed)
         else:
             remaining_duration: int = int(last_video_remaining_duration)
 
-        return get_formatted_duration(remaining_duration)
+        return remaining_duration
+
+    @classmethod
+    def get_formatted_remaining_duration(cls, guild: discord.Guild) -> str:
+        """ Get formatted representation of remaining duration for current video. """
+        remaining_duration: int = Video.get_remaining_duration(guild)
+        return get_formatted_duration(remaining_duration, justify=False)
+
+    @classmethod
+    def get_total_formatted_remaining_duration(cls, guild: discord.Guild) -> str:
+        """ Get formatted representation of remaining duration for videos in queue. """
+        current_remaining_duration: int = Video.get_remaining_duration(guild)
+
+        videos: List[Video] = Video.get_videos(guild.id)
+        next_videos: List[Video] = videos[1:]
+        next_videos_duration: Generator[int] = (video.duration for video in next_videos)
+        total_next_videos_duration: int = sum(next_videos_duration)
+
+        total_remaining_duration: int = current_remaining_duration + total_next_videos_duration
+
+        return get_formatted_duration(total_remaining_duration, justify=False)
 
     @classmethod
     def add_queue(cls, guild_id: int) -> None:
@@ -385,15 +422,15 @@ class Video:
         return cls.queues[guild_id][next_key]
 
     @classmethod
-    def get_videos(cls, guild_id: int) -> ValuesView[Video]:
+    def get_videos(cls, guild_id: int) -> List[Video]:
         """ Get videos from guild dict. """
         queue: Dict[int, Video] = cls.queues[guild_id]
-        return queue.values()
+        return list(queue.values())
 
     @classmethod
     def get_formatted_queue(cls, guild: discord.Guild) -> str:
         """ Get formatted queue of videos in guild queue. """
-        videos: List[Video] = list(cls.get_videos(guild.id))
+        videos: List[Video] = cls.get_videos(guild.id)
 
         if len(videos) == 0:
             return "Queue is empty"
@@ -401,12 +438,10 @@ class Video:
         voice_client: discord.VoiceClient = guild.voice_client
 
         video_pluralized: str = pluralize(len(videos), "video", "videos")
-        if voice_client.is_playing():
-            video_state = "Playing"
-        elif voice_client.is_paused():
-            video_state = "Paused"
-        else:
-            video_state = "Downloading"
+
+        is_playing: bool = voice_client.is_playing()
+        is_paused: bool = voice_client.is_paused()
+        video_state: str = "Playing" if is_playing else "Paused" if is_paused else "Downloading"
 
         id_header: str = "ID"
         title_header: str = "Title"
@@ -422,10 +457,14 @@ class Video:
         duration_lengths: Set[int] = {len(video.get_formatted_duration()) for video in videos}
         duration_field_length: int = max(*duration_lengths, len(duration_header))
 
-        remaining_duration: int = Video.get_formatted_remaining_duration(guild)
+        formatted_remaining_duration: str = Video.get_formatted_remaining_duration(guild)
+
+        formatted_total_remaining_duration: str = Video.get_total_formatted_remaining_duration(guild)
 
         header: str = (f"{len(videos)} {video_pluralized} found\n" +
-                       f"Current video: {video_state}, {remaining_duration} remaining\n\n")
+                       f"Current state: {video_state}\n" +
+                       f"Current remaining: {formatted_remaining_duration}\n" +
+                       f"Total remaining: {formatted_total_remaining_duration}\n\n")
 
         table_header: str = (f"{id_header.ljust(id_field_length)} | " +
                              f"{title_header.ljust(title_field_length)} | " +
@@ -448,6 +487,13 @@ class Video:
 
 # ---------- Exceptions ---------- #
 
+class MissingParameterException(Exception):
+    """ Exception triggered when a command doesn't receive a required parameter. """
+
+    def __init__(self, parameter_name: str):
+        self.parameter_name: str = parameter_name
+
+
 class TooManyParametersException(Exception):
     """ Exception triggered when a command receives more parameters than expected. """
     pass
@@ -455,6 +501,7 @@ class TooManyParametersException(Exception):
 
 class NoPermissionException(Exception):
     """ Exception triggered when a user requests an action which he doesn't have permission to execute. """
+
     def __init__(self, user_mention: str, action_name: str):
         self.user_mention: str = user_mention
         self.action_name: str = action_name
@@ -462,6 +509,7 @@ class NoPermissionException(Exception):
 
 class UserNotInChannelException(Exception):
     """ Exception triggered when a user requests an action which requires him to be in a voice channel. """
+
     def __init__(self):
         pass
 
@@ -482,9 +530,6 @@ def extract_id(s: str) -> int:
 def validate_number(num_str: str, min_value: int, max_value: int) -> bool:
     """ Inform if given number is in range of given boundaries. """
     try:
-        if num_str.startswith("-"):
-            num_str = num_str[1:]
-
         is_num_number: bool = re.search("\D", num_str) is None
         num: int = int(num_str)
         is_num_on_bounds: bool = (min_value <= num <= max_value)
@@ -575,9 +620,9 @@ async def restrict(message: discord.Message,
 
     # Validate length
     if length == 1:
-        return "No 'member' parameter was given"
+        raise MissingParameterException("member")
     if length == 2:
-        return "No 'seconds' parameter was given"
+        raise MissingParameterException("seconds")
     if length > required_length:
         raise TooManyParametersException()
 
@@ -621,10 +666,11 @@ async def restrict(message: discord.Message,
         await member.edit(**kwarg_enable)
         await message.channel.send(reply)
         await asyncio.sleep(seconds)
-    except discord.errors.HTTPException:
+    except discord.errors.HTTPException as e:
         if restrict_event_class.name_present in voice_restrictions:
             return "Target user is not in voice chat"
         else:
+            print(e)
             return (f"User {message.author.mention} doesn't have permission to " +
                     f"{restrict_event_class.name_present} user {member.mention}")
 
@@ -649,7 +695,7 @@ async def unrestrict(message: discord.Message,
 
     # Validate length
     if length == 1:
-        return "No 'member' parameter was given"
+        raise MissingParameterException("member")
     if length > required_length:
         raise TooManyParametersException()
 
@@ -714,10 +760,11 @@ async def process_message(message: discord.Message) -> str:
 
         # Handle special messages
         content_lower: str = message.content.lower()
-        key: str = next((key for key in special_messages if content_lower.startswith(f"{key} ")), None)
+        key: str = next((key for key in special_messages if content_lower.startswith(key)), None)
         is_special: bool = key is not None
         if is_special:
-            special_message: str = special_messages[key]()
+            special_function: Callable = special_messages[key]
+            special_message: str = special_function()
             return special_message
 
         # Verify if message is just bot highlight
@@ -809,7 +856,13 @@ async def request_voice_client(author: discord.Member, guild: discord.Guild) -> 
     return voice_client
 
 
-def proceed_queue(guild: discord.Guild, is_skip=False) -> None:
+async def disconnect(guild: discord.Guild) -> None:
+    """ Disconnect voice client from guild and clear queue. """
+    await guild.voice_client.disconnect()
+    Video.clear_queue(guild.id)
+
+
+async def update_queue(guild: discord.Guild, is_skip=False) -> None:
     """ Handle video add/play. """
     queue: Dict[int, Video] = Video.get_queue(guild.id)
 
@@ -819,14 +872,16 @@ def proceed_queue(guild: discord.Guild, is_skip=False) -> None:
             guild.voice_client.stop()
         next_video: Video = Video.get_next_video(guild.id)
         if not guild.voice_client.is_playing():
-            guild.voice_client.play(next_video.audio_source, after=lambda e: proceed_queue(guild, is_skip=True))
+            guild.voice_client.play(next_video.audio_source,
+                                    after=lambda e: loop.create_task(update_queue(guild, is_skip=True)))
 
         # Update last play/pause timestamp
         Video.last_video_plays[guild.id] = time.time()
         # Update remaining duration
         Video.last_video_remaining_durations[guild.id] = next_video.duration
-    except StopIteration:
-        pass
+
+    except StopIteration as e:
+        await disconnect(guild)
 
 
 def shuffle_dict(d: Dict[int, Any]) -> Dict[int, Any]:
@@ -843,26 +898,49 @@ def count_big_chars(s: str) -> int:
     return sum(ord(char) in big_char_codes for char in s)
 
 
-def get_current_datetime() -> datetime.datetime:
+async def get_current_datetime() -> datetime.datetime:
     """ Request current UTC time and get datetime object from it. """
-    return datetime.datetime.fromtimestamp(time.time() - 35) + datetime.timedelta(hours=3)
+    url: str = "https://www.epochconverter.com"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            content: str = await response.text()
+            soup: bs4.BeautifulSoup = bs4.BeautifulSoup(content, features="lxml")
+            element: bs4.element.Tag = soup.select_one("#ecclock")
+            timestamp: int = int(element.text)
+
+    return datetime.datetime.fromtimestamp(timestamp).now() + datetime.timedelta(hours=0)
 
 
-def get_formatted_duration(seconds: int) -> str:
+def get_formatted_duration(seconds: int, justify=False) -> str:
     """ Get formatted representation of duration. """
+    formatted_hours: str = str(seconds // 3600)
+    formatted_minutes: str = str(seconds // 60)
+    formatted_seconds: str = str(seconds % 60)
+
+    if justify:
+        formatted_minutes = formatted_minutes.rjust(2)
+        formatted_hours = formatted_hours.rjust(2)
+
     if seconds < 60:
-        return f"{seconds}s"
+        return f"{formatted_seconds}s"
     elif seconds < 3600:
-        return f"{seconds // 60}m {seconds % 60}s"
+        return f"{formatted_minutes}m {formatted_seconds}s"
     else:
-        return f"{seconds // 3600}h {seconds % 3600 // 60}m {seconds % 60}s"
+        return f"{formatted_hours}h {formatted_minutes}m {formatted_seconds}s"
+
+
+async def update_queue_and_feedback(guild: discord.guild) -> str:
+    """ Update queue and provide feedback about last video appended. """
+    queue: Dict[int, Video] = Video.get_queue(guild.id)
+    state: str = "Playing" if len(queue) == 0 else "Queued"
+    await update_queue(guild)
+    video: Video = Video.get_next_video(guild.id)
+
+    return f"{state} {video.title}"
 
 
 # ---------- Interface ---------- #
-
-def suggest_help() -> str:
-    """ Simple introduction to be performed when bot is highlighted. """
-    return f"Type {prefix}help for more info"
 
 
 def get_help(parameters: List[str]) -> str:
@@ -912,7 +990,7 @@ async def report(message: discord.Message, parameters: List[str]) -> str:
     min_required_length: int = 2
 
     if length < min_required_length:
-        return "No 'message' parameter was given"
+        raise MissingParameterException("message")
 
     content: str = message.content
     report_message_match: re.Match = re.search(f"{prefix}report\s+", content)
@@ -997,7 +1075,7 @@ async def serverlist(message: discord.Message, parameters: List[str]) -> str:
         raise TooManyParametersException()
 
     guilds: List[discord.Guild] = sorted([guild for guild in client.guilds if guild is not None],
-                                         key=lambda guild: guild.name)
+                                         key=lambda guild: guild.name.lower())
     header: str = f"{len(guilds)} servers found\n\n"
 
     name_lengths: Set[int] = {len(guild.name) for guild in guilds}
@@ -1042,11 +1120,14 @@ async def cursed(message: discord.Message, parameters: List[str]) -> str:
     filenames: List[str] = os.listdir(f"./{cursed_audios_dir}")
     filename: str = random.choice(filenames)
     file_path = f"./{cursed_audios_dir}/{filename}"
+
+    duration: int = int(librosa.get_duration(filename=file_path))
     audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path)
 
-    voice_client.play(audio_source)
+    video: Video = Video(filename, duration, message.guild, audio_source)
+    result: str = await update_queue_and_feedback(message.guild)
 
-    return f"Playing {filename}"
+    return result
 
 
 async def play(message: discord.Message, parameters: List[str]) -> str:
@@ -1109,12 +1190,13 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
 
         audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(source_file_path)
 
-        queue: Dict[int, Video] = Video.get_queue(message.guild.id)
-        state: str = "Queued" if len(queue) > 0 else "Playing"
-        video: Video = Video(video_title, video_duration, message.guild, audio_source)
-        proceed_queue(message.guild)
+        # Ensure voice client is still connected
+        voice_client = await request_voice_client(message.author, message.guild)
 
-        return f"{state} {video.title}"
+        video: Video = Video(video_title, video_duration, message.guild, audio_source)
+        result: str = await update_queue_and_feedback(message.guild)
+
+        return result
 
 
 async def leave(message: discord.Message, parameters: List[str]) -> str:
@@ -1134,8 +1216,7 @@ async def leave(message: discord.Message, parameters: List[str]) -> str:
     is_in_voice_channel: bool = guild.voice_client is not None
 
     if is_in_voice_channel:
-        await guild.voice_client.disconnect()
-        Video.clear_queue(guild.id)
+        await disconnect(guild)
     else:
         return "I am not connected to a voice channel"
 
@@ -1264,13 +1345,13 @@ async def remove(message: discord.Message, parameters: List[str]) -> str:
         is_current_video: bool = video.id == video_id
 
         if is_current_video:
-            await proceed_queue(message.guild, skip=True)
+            await update_queue(message.guild, skip=True)
         else:
             Video.remove_video(message.guild.id, video_id)
     except KeyError:
         return "There is no video with given id"
 
-    return f"Video {video.title} was removed from queue"
+    return f"{video.title} was removed from queue"
 
 
 async def shuffle(message: discord.Message, parameters: List[str]) -> str:
@@ -1321,7 +1402,7 @@ async def dice(message: discord.Message, parameters: List[str]) -> str:
 
     # Validate length
     if length == 1:
-        return "No 'max number' parameter was given"
+        raise MissingParameterException("max number")
 
     if length > required_length:
         raise TooManyParametersException()
@@ -1336,10 +1417,16 @@ async def dice(message: discord.Message, parameters: List[str]) -> str:
         return ("Invalid max number, it has to be an integer " +
                 f"between {min_value} and {max_value}")
 
+    min_num: int = 1
     max_num: int = int(max_num_str)
     random_num: int = random.randint(1, max_num)
 
-    return random_num
+    # Highlight if max num was achieved
+    result: str = str(random_num)
+    if random_num in {min_num, max_num}:
+        return format_bold_text(result)
+
+    return result
 
 
 async def wipe(message: discord.Message, parameters: List[str]) -> str:
@@ -1349,7 +1436,7 @@ async def wipe(message: discord.Message, parameters: List[str]) -> str:
 
     # Validate length
     if length == 1:
-        return "No 'seconds' parameter was given"
+        raise MissingParameterException("seconds")
 
     if length > required_length:
         raise TooManyParametersException()
@@ -1375,22 +1462,40 @@ async def wipe(message: discord.Message, parameters: List[str]) -> str:
 
     total_seconds: int = int(total_seconds_str)
 
-    now: datetime.datetime = get_current_datetime()
+    now: datetime.datetime = await get_current_datetime()
     date: datetime.datetime = now - datetime.timedelta(seconds=total_seconds)
     message_amount: int = 0
+    limit: int = 500
 
-    async for recent_message in message.channel.history(after=date, oldest_first=False):
+    async for recent_message in message.channel.history(limit=limit, after=date, oldest_first=False):
         await recent_message.delete()
         message_amount += 1
 
     message_pluralized: str = pluralize(message_amount, "message", "messages")
     seconds_pluralized: str = pluralize(total_seconds, "second", "seconds")
 
-    return (f"I just wiped {message_amount} {message_pluralized} " +
-            f"sent within the last {total_seconds} {seconds_pluralized}")
+    result: str = (f"I just wiped {message_amount} {message_pluralized} " +
+                   f"sent within the last {total_seconds} {seconds_pluralized}")
+
+    if message_amount == limit:
+        result += "That's the highest amount of messages I can delete for each wipe call"
+
+    return result
 
 
 # ---------- Application variables ---------- #
+
+def TODO():
+    """ T. """
+    url: str = "https://ytcutter.com/ytcutter.php?a=form1"
+    form_body: Dict[str, str] = {
+        "videoId": "usXOS6vZOu8",
+        "startTime": "62.7",
+        "endTime": "68.8",
+        "quality": "hd720",
+        "format": "audio"
+    }
+
 
 # Async scheduler
 loop: asyncio.ProactorEventLoop = asyncio.get_event_loop()
@@ -1399,7 +1504,7 @@ loop: asyncio.ProactorEventLoop = asyncio.get_event_loop()
 srcs: List[str] = request_tpose_srcs(max_page=3)
 
 # Char code for chars that become bigger in code blocks
-big_char_codes: Set[str] = {12302, 12303}
+big_char_codes: Set[int] = {12300, 12301, 12302, 12303}
 
 # Map string to command object
 commands: Dict[str, Command] = {
@@ -1558,9 +1663,12 @@ async def on_ready():
 async def on_message(message: discord.Message):
     try:
         channel: discord.TextChannel = message.channel
+
         reply: str = await process_message(message)
         if reply is not None:
-            await message.channel.send(reply)
+            await channel.send(reply)
+    except MissingParameterException as e:
+        await channel.send(f"No {e.parameter_name} parameter was given")
     except TooManyParametersException as e:
         await channel.send("Too many parameters")
     except NoPermissionException as e:
@@ -1620,7 +1728,7 @@ async def on_guild_join(guild: discord.Guild):
         Video.ids[guild.id] = 1
         Video.last_video_plays[guild.id] = 0.0
         Video.last_video_pauses[guild.id] = 0.0
-        Video.last_video_remaining_durations[guild.id] = 0.0
+        Video.last_video_remaining_durations[guild.id] = 0
 
 
 # Member leave guild

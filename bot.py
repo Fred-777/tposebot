@@ -117,12 +117,16 @@ class Command:
 
 class RestrictEvent(ABC):
     """ Base class for member restriction event management. """
+    ids: Dict[int, Dict[int, int]] = None
     events: Dict[int, Dict[int, RestrictEvent]] = None
 
     def __init__(self, member: discord.Member, seconds: int):
+        self.id = self.__class__.ids[member.guild.id]
         self.member: discord.Member = member
         self.seconds: int = seconds
         self.start_time: float = time.time()
+
+        self.__class__.ids[member.guild.id] += 1
 
     def get_remaining_seconds(self) -> int:
         """ Calculate amount of remaining seconds to end mute. """
@@ -230,6 +234,7 @@ class RestrictEvent(ABC):
 
 class AmputateEvent(RestrictEvent):
     """ Amputate event on progress. """
+    ids: Dict[int, Dict[int, int]] = None
     events: Dict[int, Dict[int, RestrictEvent]] = None
 
     name_present: str = "amputate"
@@ -325,9 +330,9 @@ class Video:
         Video.ids[guild.id] += 1
         Video.add_video(guild.id, self)
 
-    def get_formatted_duration(self, justify=False) -> str:
+    def get_formatted_duration(self) -> str:
         """ Get formatted representation of duration. """
-        return get_formatted_duration(self.duration, justify=justify)
+        return get_formatted_duration(self.duration, justify=True)
 
     @classmethod
     def get_remaining_duration(cls, guild: discord.Guild) -> int:
@@ -487,9 +492,16 @@ class Video:
 
 # ---------- Exceptions ---------- #
 
+class InvalidIntException(Exception):
+    """ Exception triggered when a expected integer is invalid. """
+    def __init__(self, name: str, min_value: int, max_value: int):
+        self.name: str = name
+        self.min_value: int = min_value
+        self.max_value: int = max_value
+
+
 class MissingParameterException(Exception):
     """ Exception triggered when a command doesn't receive a required parameter. """
-
     def __init__(self, parameter_name: str):
         self.parameter_name: str = parameter_name
 
@@ -501,7 +513,6 @@ class TooManyParametersException(Exception):
 
 class NoPermissionException(Exception):
     """ Exception triggered when a user requests an action which he doesn't have permission to execute. """
-
     def __init__(self, user_mention: str, action_name: str):
         self.user_mention: str = user_mention
         self.action_name: str = action_name
@@ -509,7 +520,6 @@ class NoPermissionException(Exception):
 
 class UserNotInChannelException(Exception):
     """ Exception triggered when a user requests an action which requires him to be in a voice channel. """
-
     def __init__(self):
         pass
 
@@ -527,7 +537,7 @@ def extract_id(s: str) -> int:
     return int(match[0]) if match is not None else -1
 
 
-def validate_number(num_str: str, min_value: int, max_value: int) -> bool:
+def validate_int(num_str: str, min_value: int, max_value: int) -> bool:
     """ Inform if given number is in range of given boundaries. """
     try:
         is_num_number: bool = re.search("\D", num_str) is None
@@ -650,15 +660,15 @@ async def restrict(message: discord.Message,
     # Validate seconds
     min_seconds_amount: int = 1
     max_seconds_amount: int = 7200
-    is_seconds_valid: bool = validate_number(seconds_str, min_seconds_amount, max_seconds_amount)
+    is_seconds_valid: bool = validate_int(seconds_str, min_seconds_amount, max_seconds_amount)
 
     if not is_seconds_valid:
-        return ("Invalid amount of seconds, it has to be an integer " +
-                f"between {min_seconds_amount} and {max_seconds_amount}")
+        raise InvalidIntException("seconds", min_seconds_amount, max_seconds_amount)
     seconds: int = int(seconds_str)
 
     # Restrict and sleep
     restrict_event: RestrictEvent = restrict_event_class(message.guild, member, seconds)
+    restriction_id: int = restrict_event.id
     reply: str = f"User {member.mention} is {restrict_event_class.name_past} for {seconds} seconds"
 
     try:
@@ -677,12 +687,14 @@ async def restrict(message: discord.Message,
     # Unrestrict if still restricted
     guild_id: int = message.guild.id
     is_restricted: bool = restrict_event_class.check_event(guild_id, member.id)
-    if is_restricted:
-        kwarg_disable: Dict[str, Any] = restrict_event.get_kwarg_disable()
-        await member.edit(**kwarg_disable)
 
-        event_exists: bool = restrict_event_class.check_event(guild_id, member.id)
-        if event_exists:
+    if is_restricted:
+        current_restrict_event: RestrictEvent = restrict_event_class.get_event(guild_id, member_id)
+        is_same_restriction: bool = restrict_event.id == current_restrict_event.id
+
+        if is_same_restriction:
+            kwarg_disable: Dict[str, Any] = restrict_event.get_kwarg_disable()
+            await member.edit(**kwarg_disable)
             restrict_event_class.remove_event(guild_id, member.id)
 
 
@@ -756,7 +768,7 @@ async def process_message(message: discord.Message) -> str:
 
     if not sent_by_bot and not is_empty:
 
-        print(f"Message received: {message.content}")
+        print(f"{message.guild}: {message.content}")
 
         # Handle special messages
         content_lower: str = message.content.lower()
@@ -920,7 +932,7 @@ def get_formatted_duration(seconds: int, justify=False) -> str:
 
     if justify:
         formatted_minutes = formatted_minutes.rjust(2)
-        formatted_hours = formatted_hours.rjust(2)
+        formatted_seconds = formatted_seconds.rjust(2)
 
     if seconds < 60:
         return f"{formatted_seconds}s"
@@ -1411,9 +1423,10 @@ async def dice(message: discord.Message, parameters: List[str]) -> str:
     max_num_str: str = parameters[1]
     min_value: int = 2
     max_value: int = 1000000
-    is_max_num_valid: int = validate_number(max_num_str, min_value, max_value)
+    is_max_num_valid: int = validate_int(max_num_str, min_value, max_value)
 
     if not is_max_num_valid:
+        raise InvalidIntException("max number", min_value, max_value)
         return ("Invalid max number, it has to be an integer " +
                 f"between {min_value} and {max_value}")
 
@@ -1454,11 +1467,10 @@ async def wipe(message: discord.Message, parameters: List[str]) -> str:
     total_seconds_str: str = parameters[1]
     min_value: int = 1
     max_value: int = 7200
-    is_max_num_valid: int = validate_number(total_seconds_str, min_value, max_value)
+    is_max_num_valid: int = validate_int(total_seconds_str, min_value, max_value)
 
     if not is_max_num_valid:
-        return ("Invalid seconds amount, it has to be an integer " +
-                f"between {min_value} and {max_value}")
+        raise InvalidIntException("seconds", min_value, max_value)
 
     total_seconds: int = int(total_seconds_str)
 
@@ -1640,13 +1652,15 @@ voice_restrictions: Set[str] = {"deaf", "mute"}
 @client.event
 async def on_connect():
     # Initialize data that requires connection
+    RestrictEvent.ids = {guild.id: 1 for guild in client.guilds}
     RestrictEvent.events = {guild.id: {} for guild in client.guilds}
 
-    for subclass in RestrictEvent.__subclasses__():
-        subclass.events = copy.deepcopy(RestrictEvent.events)
+    for restrict_subclass in RestrictEvent.__subclasses__():
+        restrict_subclass.ids = copy.deepcopy(RestrictEvent.ids)
+        restrict_subclass.events = copy.deepcopy(RestrictEvent.events)
 
-    Video.queues = {guild.id: {} for guild in client.guilds}
     Video.ids = {guild.id: 1 for guild in client.guilds}
+    Video.queues = {guild.id: {} for guild in client.guilds}
     Video.last_video_plays = {guild.id: 0.0 for guild in client.guilds}
     Video.last_video_pauses = {guild.id: 0.0 for guild in client.guilds}
     Video.last_video_remaining_durations = {guild.id: 0.0 for guild in client.guilds}
@@ -1667,6 +1681,8 @@ async def on_message(message: discord.Message):
         reply: str = await process_message(message)
         if reply is not None:
             await channel.send(reply)
+    except InvalidIntException as e:
+        await channel.send(f"Invalid {e.name}, it has to be an integer between {e.min_value} and {e.max_value}")
     except MissingParameterException as e:
         await channel.send(f"No {e.parameter_name} parameter was given")
     except TooManyParametersException as e:

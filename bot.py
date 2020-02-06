@@ -234,7 +234,6 @@ class RestrictEvent(ABC):
 
 class AmputateEvent(RestrictEvent):
     """ Amputate event on progress. """
-    ids: Dict[int, Dict[int, int]] = None
     events: Dict[int, Dict[int, RestrictEvent]] = None
 
     name_present: str = "amputate"
@@ -668,7 +667,6 @@ async def restrict(message: discord.Message,
 
     # Restrict and sleep
     restrict_event: RestrictEvent = restrict_event_class(message.guild, member, seconds)
-    restriction_id: int = restrict_event.id
     reply: str = f"User {member.mention} is {restrict_event_class.name_past} for {seconds} seconds"
 
     try:
@@ -877,6 +875,7 @@ async def disconnect(guild: discord.Guild) -> None:
 async def update_queue(guild: discord.Guild, is_skip=False) -> None:
     """ Handle video add/play. """
     queue: Dict[int, Video] = Video.get_queue(guild.id)
+    is_play: bool = len(queue) == 1
 
     try:
         if is_skip:
@@ -887,10 +886,10 @@ async def update_queue(guild: discord.Guild, is_skip=False) -> None:
             guild.voice_client.play(next_video.audio_source,
                                     after=lambda e: loop.create_task(update_queue(guild, is_skip=True)))
 
-        # Update last play/pause timestamp
-        Video.last_video_plays[guild.id] = time.time()
-        # Update remaining duration
-        Video.last_video_remaining_durations[guild.id] = next_video.duration
+        # Update remaining duration on video play / skip and last play/pause timestamp
+        if is_play or is_skip:
+            Video.last_video_plays[guild.id] = time.time()
+            Video.last_video_remaining_durations[guild.id] = next_video.duration
 
     except StopIteration as e:
         await disconnect(guild)
@@ -927,7 +926,7 @@ async def get_current_datetime() -> datetime.datetime:
 def get_formatted_duration(seconds: int, justify=False) -> str:
     """ Get formatted representation of duration. """
     formatted_hours: str = str(seconds // 3600)
-    formatted_minutes: str = str(seconds // 60)
+    formatted_minutes: str = str((seconds // 60) % 60)
     formatted_seconds: str = str(seconds % 60)
 
     if justify:
@@ -942,12 +941,11 @@ def get_formatted_duration(seconds: int, justify=False) -> str:
         return f"{formatted_hours}h {formatted_minutes}m {formatted_seconds}s"
 
 
-async def update_queue_and_feedback(guild: discord.guild) -> str:
+async def update_queue_and_feedback(guild: discord.guild, video: Video) -> str:
     """ Update queue and provide feedback about last video appended. """
     queue: Dict[int, Video] = Video.get_queue(guild.id)
-    state: str = "Playing" if len(queue) == 0 else "Queued"
+    state: str = "Playing" if len(queue) == 1 else "Queued"
     await update_queue(guild)
-    video: Video = Video.get_next_video(guild.id)
 
     return f"{state} {video.title}"
 
@@ -1137,7 +1135,7 @@ async def cursed(message: discord.Message, parameters: List[str]) -> str:
     audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path)
 
     video: Video = Video(filename, duration, message.guild, audio_source)
-    result: str = await update_queue_and_feedback(message.guild)
+    result: str = await update_queue_and_feedback(message.guild, video)
 
     return result
 
@@ -1206,7 +1204,7 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
         voice_client = await request_voice_client(message.author, message.guild)
 
         video: Video = Video(video_title, video_duration, message.guild, audio_source)
-        result: str = await update_queue_and_feedback(message.guild)
+        result: str = await update_queue_and_feedback(message.guild, video)
 
         return result
 
@@ -1655,9 +1653,9 @@ async def on_connect():
     RestrictEvent.ids = {guild.id: 1 for guild in client.guilds}
     RestrictEvent.events = {guild.id: {} for guild in client.guilds}
 
-    for restrict_subclass in RestrictEvent.__subclasses__():
-        restrict_subclass.ids = copy.deepcopy(RestrictEvent.ids)
-        restrict_subclass.events = copy.deepcopy(RestrictEvent.events)
+    for restrict_event_class in RestrictEvent.__subclasses__():
+        restrict_event_class.ids = copy.deepcopy(RestrictEvent.ids)
+        restrict_event_class.events = copy.deepcopy(RestrictEvent.events)
 
     Video.ids = {guild.id: 1 for guild in client.guilds}
     Video.queues = {guild.id: {} for guild in client.guilds}
@@ -1693,6 +1691,35 @@ async def on_message(message: discord.Message):
         await channel.send("You must be connected to a voice channel to use this command")
     except UnicodeEncodeError:
         pass
+
+    # START BURRICE SECTION
+    # If guild is decente
+    decente_id: int = 289874563230072846
+    os_fodas_role_id: int = 549369366584754207
+    os_fodas_role = discord.utils.find(lambda role: role.id == os_fodas_role_id, message.guild.roles)
+    if message.content == "--goiaba" and message.guild.id == decente_id:
+
+        author: discord.Member = message.author
+        voice_channel: discord.VoiceChannel = message.author.voice.channel
+
+        if os_fodas_role not in author.roles:
+            await message.channel.send(f"This command requires role {os_fodas_role.name}")
+        else:
+
+            # Explosive goiaba audio
+            voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+            file_path: str = f"{base_path}/ruim.mp3"
+            audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path)
+            video = Video(file_path, 99999, message.guild, audio_source)
+
+            # Mute everyone from voice channel except the person who called it
+            for member in voice_channel.members:
+                if member.id not in [author.id, bot_id]:
+                    await member.edit(mute=True)
+
+            await update_queue(message.guild)
+            await message.channel.send("XDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD")
+    # END BURRICE SECTION
 
 
 # Join, leave, mute, deafen on VC
@@ -1736,8 +1763,8 @@ async def on_guild_join(guild: discord.Guild):
 
     # Add guild dict
     if was_bot_added:
-        for event_class in RestrictEvent.__subclasses__():
-            event_class.add_guild(guild.id)
+        for restrict_event_class in RestrictEvent.__subclasses__():
+            restrict_event_class.add_guild(guild.id)
 
         Video.add_queue(guild.id)
         Video.queues[guild.id] = {}
@@ -1754,8 +1781,8 @@ async def on_member_remove(member: discord.Member):
 
     # Remove guild dict
     if was_bot_removed:
-        for event_class in RestrictEvent.__subclasses__():
-            event_class.remove_guild(member.guild.id)
+        for restrict_event_class in RestrictEvent.__subclasses__():
+            restrict_event_class.remove_guild(member.guild.id)
         guild: discord.Guild = member.guild
 
         Video.remove_queue(guild.id)

@@ -1629,7 +1629,7 @@ commands: Dict[str, Command] = {
     "wipe": Command(f"{prefix}wipe",
                     "Remove all messages sent within last given number of seconds",
                     f"Remove all messages sent within last 30 seconds\n{prefix}wipe 30"),
-    "wipe": Command(f"{prefix}nword",
+    "nword": Command(f"{prefix}nword",
                     "Get a random word that starts with n",
                     f"\n{prefix}nword")
 }

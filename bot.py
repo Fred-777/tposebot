@@ -41,6 +41,11 @@ youtube_videos_source_dir: str = "youtube-videos-source"
 cursed_audios_dir: str = "cursed-audios"
 youtube_videos_download_dir: str = "youtube-videos-download"
 
+n_words_path: str = "./n-words.txt"
+
+with open(n_words_path) as file:
+    n_words: List[str] = file.readlines()
+
 dirnames: List[str] = [
     youtube_videos_source_dir,
     cursed_audios_dir,
@@ -78,7 +83,10 @@ with open(extra_srcs_path) as file:
 
 with open(report_path) as file:
     data: str = file.read()
-    reports: Set[str] = set(json.loads(data))
+    try:
+        reports: Set[str] = set(json.loads(data))
+    except json.JSONDecodeError:
+        reports: Set[str] = set()
 
 
 # ---------- Class helpers ---------- #
@@ -432,6 +440,11 @@ class Video:
         return list(queue.values())
 
     @classmethod
+    def get_video(cls, guild_id: int, video_id: int) -> Video:
+        """ Get video from videos dict. """
+        return cls.queues[guild_id][video_id]
+
+    @classmethod
     def get_formatted_queue(cls, guild: discord.Guild) -> str:
         """ Get formatted queue of videos in guild queue. """
         videos: List[Video] = cls.get_videos(guild.id)
@@ -595,6 +608,8 @@ def request_tpose_srcs(max_page: int = 1) -> List[str]:
 
 def replace_bad_words(s: str) -> Tuple[str, int]:
     """ Replace bad words in a message. Return filtered message and amount of filtered words. """
+    # Prevent letter substitution through letters
+    s = s.replace("0", "o").replace("1", "i").replace("3", "e").replace("4", "a")
     words: List[str] = re.findall("\S+", s) or []
 
     bad_words: Set[str] = {word for word in words
@@ -1351,7 +1366,7 @@ async def remove(message: discord.Message, parameters: List[str]) -> str:
 
     # Attempt to remove video by id
     try:
-        video: Video = Video.get_next_video(message.guild.id)
+        video: Video = Video.get_video(message.guild.id)
         is_current_video: bool = video.id == video_id
 
         if is_current_video:
@@ -1493,6 +1508,19 @@ async def wipe(message: discord.Message, parameters: List[str]) -> str:
     return result
 
 
+async def nword(message: discord.Message, parameters: List[str]) -> str:
+    """ Get a random word that starts with n. """
+    length: int = len(parameters)
+    required_length: int = 1
+
+    if length > required_length:
+        raise TooManyParametersException()
+
+    n_word: str = random.choice(n_words)
+
+    return n_word
+
+
 # ---------- Application variables ---------- #
 
 def TODO():
@@ -1599,7 +1627,10 @@ commands: Dict[str, Command] = {
                     f"Roll a random number from 1 to 10\n{prefix}roll 10"),
     "wipe": Command(f"{prefix}wipe",
                     "Remove all messages sent within last given number of seconds",
-                    f"Remove all messages sent within last 30 seconds\n{prefix}wipe 30")
+                    f"Remove all messages sent within last 30 seconds\n{prefix}wipe 30"),
+    "wipe": Command(f"{prefix}nword",
+                    "Get a random word that starts with n",
+                    f"\n{prefix}nword")
 }
 
 # Specific messages to be replied
@@ -1638,7 +1669,8 @@ commands_map: Dict[str, Callable] = {
     f"{prefix}shuffle": shuffle,
     f"{prefix}queue": queue,
     f"{prefix}dice": dice,
-    f"{prefix}wipe": wipe
+    f"{prefix}wipe": wipe,
+    f"{prefix}nword": nword
 }
 
 voice_restrictions: Set[str] = {"deaf", "mute"}
@@ -1694,31 +1726,36 @@ async def on_message(message: discord.Message):
 
     # START BURRICE SECTION
     # If guild is decente
-    decente_id: int = 289874563230072846
-    os_fodas_role_id: int = 549369366584754207
-    os_fodas_role = discord.utils.find(lambda role: role.id == os_fodas_role_id, message.guild.roles)
-    if message.content == "--goiaba" and message.guild.id == decente_id:
+    decente_guild_id: int = 289874563230072846
 
-        author: discord.Member = message.author
-        voice_channel: discord.VoiceChannel = message.author.voice.channel
+    if message.guild.id == decente_guild_id:
 
-        if os_fodas_role not in author.roles:
-            await message.channel.send(f"This command requires role {os_fodas_role.name}")
-        else:
+        fred_member_id: int = 239388097714978817
+        os_fodas_role_id: int = 549369366584754207
 
-            # Explosive goiaba audio
-            voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
-            file_path: str = f"{base_path}/ruim.mp3"
-            audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path)
-            video = Video(file_path, 99999, message.guild, audio_source)
+        os_fodas_role: discord.Role = discord.utils.find(lambda role: role.id == os_fodas_role_id, message.guild.roles)
 
-            # Mute everyone from voice channel except the person who called it
-            for member in voice_channel.members:
-                if member.id not in [author.id, bot_id]:
-                    await member.edit(mute=True)
+        if message.content == "--goiaba":
 
-            await update_queue(message.guild)
-            await message.channel.send("XDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD")
+            author: discord.Member = message.author
+            voice_channel: discord.VoiceChannel = message.author.voice.channel
+            if os_fodas_role in message.author.roles or message.author.id == fred_member_id:
+
+                # Explosive goiaba audio
+                voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+                file_path: str = f"{base_path}/ruim.mp3"
+                audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path)
+                video = Video(file_path, 99999, message.guild, audio_source)
+
+                # Mute everyone from voice channel except the person who called it
+                for member in voice_channel.members:
+                    if member.id not in [author.id, bot_id]:
+                        await member.edit(mute=True)
+
+                await update_queue(message.guild)
+                await message.channel.send("XDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD")
+            else:
+                await message.channel.send(f"This command requires role {os_fodas_role.name}")
     # END BURRICE SECTION
 
 

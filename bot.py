@@ -1366,17 +1366,18 @@ async def remove(message: discord.Message, parameters: List[str]) -> str:
 
     # Attempt to remove video by id
     try:
-        video: Video = Video.get_video(message.guild.id)
-        is_current_video: bool = video.id == video_id
+        current_video: Video = Video.get_next_video(message.guild.id)
+        to_be_removed_video: Video = Video.get_video(message.guild.id, video_id)
+        is_current_video: bool = current_video.id == video_id
 
         if is_current_video:
-            await update_queue(message.guild, skip=True)
+            message.guild.voice_client.stop()
         else:
             Video.remove_video(message.guild.id, video_id)
     except KeyError:
         return "There is no video with given id"
 
-    return f"{video.title} was removed from queue"
+    return f"{to_be_removed_video.title} was removed from queue"
 
 
 async def shuffle(message: discord.Message, parameters: List[str]) -> str:

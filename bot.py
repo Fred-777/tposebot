@@ -18,6 +18,7 @@ import os
 import random
 import re
 import requests
+import sys
 import time
 import youtube_dl
 
@@ -97,10 +98,14 @@ def suggest_help() -> str:
     return f"Type {prefix}help for more info"
 
 
+author_id: int = 239388097714978817
 bot_id: int = 647954736959717416
 game: discord.Game = discord.Game(suggest_help())
 client: discord.Client = discord.Client(activity=game)
 
+# Referenced before connection
+author_user: discord.User = None
+connect_datetime: datetime.datetime = None
 
 # ---------- Classes ---------- #
 
@@ -506,6 +511,7 @@ class Video:
 
 class InvalidIntException(Exception):
     """ Exception triggered when a expected integer is invalid. """
+
     def __init__(self, name: str, min_value: int, max_value: int):
         self.name: str = name
         self.min_value: int = min_value
@@ -785,8 +791,10 @@ async def process_message(message: discord.Message) -> str:
 
         # Handle special messages
         content_lower: str = message.content.lower()
-        key: str = next((key for key in special_messages if content_lower.startswith(key)), None)
+        key: str = next((key for key in special_messages
+                         if re.search(f"^{key}(\s|$)", content_lower) is not None), None)
         is_special: bool = key is not None
+
         if is_special:
             special_function: Callable = special_messages[key]
             special_message: str = special_function()
@@ -870,11 +878,11 @@ async def request_video_url(query: str) -> str:
     return video_url
 
 
-async def request_voice_client(author: discord.Member, guild: discord.Guild) -> discord.VoiceClient:
-    """ Request voice client for given guild and connect bot if it's not connected. """
-    is_bot_in_channel: bool = guild.voice_client is not None
+async def request_voice_client(author: discord.Member) -> discord.VoiceClient:
+    """ Request voice client for author voice channel and connect bot if it's not connected. """
+    is_bot_in_channel: bool = author.guild.voice_client is not None
     if is_bot_in_channel:
-        voice_client: discord.VoiceClient = guild.voice_client
+        voice_client: discord.VoiceClient = author.guild.voice_client
     else:
         voice_client: discord.VoiceClient = await author.voice.channel.connect()
 
@@ -935,7 +943,7 @@ async def get_current_datetime() -> datetime.datetime:
             element: bs4.element.Tag = soup.select_one("#ecclock")
             timestamp: int = int(element.text)
 
-    return datetime.datetime.fromtimestamp(timestamp).now() + datetime.timedelta(hours=0)
+    return datetime.datetime.fromtimestamp(timestamp).now() + datetime.timedelta(hours=0, seconds=15)
 
 
 def get_formatted_duration(seconds: int, justify=False) -> str:
@@ -963,6 +971,22 @@ async def update_queue_and_feedback(guild: discord.guild, video: Video) -> str:
     await update_queue(guild)
 
     return f"{state} {video.title}"
+
+
+def get_python_version():
+    """ Get current python version. """
+    version = re.search("\S+", sys.version)[0]
+
+    return version
+
+
+def get_seconds_difference(datetime1: datetime.datetime, datetime2: datetime.datetime) -> int:
+    """ Get seconds difference between two given datetimes. """
+    result_datetime: datetime.timedelta = datetime1 - datetime2
+    total_seconds: float = result_datetime.total_seconds()
+    seconds_difference: int = abs(int(total_seconds))
+
+    return seconds_difference
 
 
 # ---------- Interface ---------- #
@@ -1140,7 +1164,7 @@ async def cursed(message: discord.Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise UserNotInChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+    voice_client: discord.VoiceClient = await request_voice_client(message.author)
 
     filenames: List[str] = os.listdir(f"./{cursed_audios_dir}")
     filename: str = random.choice(filenames)
@@ -1163,7 +1187,7 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise UserNotInChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+    voice_client: discord.VoiceClient = await request_voice_client(message.author)
 
     has_query: bool = length > 1
     query: str = " ".join(parameters[1:]) if has_query else None
@@ -1216,7 +1240,7 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
         audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(source_file_path)
 
         # Ensure voice client is still connected
-        voice_client = await request_voice_client(message.author, message.guild)
+        voice_client = await request_voice_client(message.author)
 
         video: Video = Video(video_title, video_duration, message.guild, audio_source)
         result: str = await update_queue_and_feedback(message.guild, video)
@@ -1259,7 +1283,7 @@ async def pause(message: discord.Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise UserNotInChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+    voice_client: discord.VoiceClient = await request_voice_client(message.author)
 
     if voice_client.is_playing():
         voice_client.pause()
@@ -1291,7 +1315,7 @@ async def unpause(message: discord.Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise UserNotInChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+    voice_client: discord.VoiceClient = await request_voice_client(message.author)
 
     if voice_client.is_playing():
         return "I am already unpaused"
@@ -1315,7 +1339,7 @@ async def stop(message: discord.Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise UserNotInChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+    voice_client: discord.VoiceClient = await request_voice_client(message.author)
 
     voice_client.stop()
     Video.clear_queue(message.guild.id)
@@ -1334,7 +1358,7 @@ async def skip(message: discord.Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise UserNotInChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+    voice_client: discord.VoiceClient = await request_voice_client(message.author)
 
     if voice_client.is_playing():
         message.guild.voice_client.stop()
@@ -1355,7 +1379,7 @@ async def remove(message: discord.Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise UserNotInChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+    voice_client: discord.VoiceClient = await request_voice_client(message.author)
 
     # Check if id is number
     video_id_str = parameters[1]
@@ -1389,7 +1413,7 @@ async def shuffle(message: discord.Message, parameters: List[str]) -> str:
     if length > required_length:
         raise TooManyParametersException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+    voice_client: discord.VoiceClient = await request_voice_client(message.author)
 
     queue: Dict[int, Video] = Video.get_queue(message.guild.id)
 
@@ -1404,6 +1428,7 @@ async def shuffle(message: discord.Message, parameters: List[str]) -> str:
     shuffled_queue: Dict[int, Video] = {current_key: current_video, **shuffled_next_videos}
 
     Video.set_queue(message.guild.id, shuffled_queue)
+
     return "Queue just got shuffled"
 
 
@@ -1522,18 +1547,52 @@ async def nword(message: discord.Message, parameters: List[str]) -> str:
     return n_word
 
 
+async def info(message: discord.Message, parameters: List[str]) -> str:
+    """ Get some general info about this bot. """
+    length: int = len(parameters)
+    required_length: int = 1
+
+    if length > required_length:
+        raise TooManyParametersException()
+
+    language_name: str = "Python"
+    language_version: str = get_python_version()
+
+    start_date: str = "Early december 2019"
+
+    current_datetime: datetime.datetime = await get_current_datetime()
+    seconds_difference: int = get_seconds_difference(connect_datetime, current_datetime)
+    active_time: str = get_formatted_duration(seconds_difference)
+
+    output: List[str] = [
+        f"Author: {author_user}",
+        f"Programming language: {language_name} v{language_version}",
+        f"Start date: {start_date}",
+        f"Time running: {active_time}"
+    ]
+
+    formatted_output: str = "\n".join(output)
+
+    return format_code_block(formatted_output)
+
+
 # ---------- Application variables ---------- #
 
-def TODO():
+async def TODO(video_id: str):
     """ T. """
     url: str = "https://ytcutter.com/ytcutter.php?a=form1"
-    form_body: Dict[str, str] = {
-        "videoId": "usXOS6vZOu8",
+    data: Dict[str, str] = {
+        "videoId": video_id,
         "startTime": "62.7",
         "endTime": "68.8",
         "quality": "hd720",
         "format": "audio"
     }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, data=data) as response:
+            response_obj: Dict = await response.json()
+            return response_obj
 
 
 # Async scheduler
@@ -1630,8 +1689,11 @@ commands: Dict[str, Command] = {
                     "Remove all messages sent within last given number of seconds",
                     f"Remove all messages sent within last 30 seconds\n{prefix}wipe 30"),
     "nword": Command(f"{prefix}nword",
-                    "Get a random word that starts with n",
-                    f"\n{prefix}nword")
+                     "Get a random word that starts with n",
+                     f"\n{prefix}nword"),
+    "info": Command(f"{prefix}info",
+                    "Show some general information about me",
+                    f"\n{prefix}info")
 }
 
 # Specific messages to be replied
@@ -1641,7 +1703,8 @@ special_messages: Dict[str, Callable] = {
     "ok": lambda: "boomer",
     "comedores de": lambda: "coc\u00f4",
     "oi": lambda: "oi",
-    "que": lambda: "ijo"
+    "que": lambda: "ijo",
+    "caguei": lambda: "comi",
 }
 
 commands_map: Dict[str, Callable] = {
@@ -1671,7 +1734,8 @@ commands_map: Dict[str, Callable] = {
     f"{prefix}queue": queue,
     f"{prefix}dice": dice,
     f"{prefix}wipe": wipe,
-    f"{prefix}nword": nword
+    f"{prefix}nword": nword,
+    f"{prefix}info": info
 }
 
 voice_restrictions: Set[str] = {"deaf", "mute"}
@@ -1696,11 +1760,36 @@ async def on_connect():
     Video.last_video_pauses = {guild.id: 0.0 for guild in client.guilds}
     Video.last_video_remaining_durations = {guild.id: 0.0 for guild in client.guilds}
 
+    app_info: discord.AppInfo = await client.application_info()
+    global author_user
+    global connect_datetime
+    author_user = app_info.owner
+    connect_datetime = await get_current_datetime()
+
 
 # Bot ready
 @client.event
 async def on_ready():
     print(f"{client.user} awoke")
+
+    ######### Test start #########
+
+    file_path1: str = "./0.4s - 5s.m4a"
+    file_path2: str = "./5s - 56s.m4a"
+
+    audio1: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path1)
+    audio2: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path2)
+
+    my_guild_id: int = 517905518279524362
+    guild: discord.Guild = discord.utils.find(lambda guild: guild.id == my_guild_id, client.guilds)
+    author: discord.Member = discord.utils.find(lambda member: member.id == author_id, guild.members)
+    voice_client: discord.VoiceClient = await request_voice_client(author)
+
+    voice_client.play(audio1,
+                      after=lambda e: loop.create_task(voice_client.play(audio2,
+                                                                         after=lambda caguei: loop.create_task(voice_client.disconnect(force=True)))))
+
+    ######### Test end #########
 
 
 # Send message
@@ -1743,7 +1832,7 @@ async def on_message(message: discord.Message):
             if os_fodas_role in message.author.roles or message.author.id == fred_member_id:
 
                 # Explosive goiaba audio
-                voice_client: discord.VoiceClient = await request_voice_client(message.author, message.guild)
+                voice_client: discord.VoiceClient = await request_voice_client(message.author)
                 file_path: str = f"{base_path}/ruim.mp3"
                 audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path)
                 video = Video(file_path, 99999, message.guild, audio_source)

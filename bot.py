@@ -4,13 +4,14 @@ from __future__ import annotations
 from typing import *
 # Abstract classes and methods
 from abc import ABC, abstractmethod
+# Everything from discord
+from discord import *
 
 import aiohttp
 import asyncio
 import bs4
 import copy
 import datetime
-import discord
 import dotenv
 import json
 import librosa
@@ -38,7 +39,7 @@ bad_words_path: str = "./bad-words.txt"
 extra_srcs_path: str = "./extra-srcs.txt"
 report_path: str = "./reports.txt"
 
-youtube_videos_source_dir: str = "youtube-videos-source"
+youtube_videos_source_dir: str = "youtube-videos"
 cursed_audios_dir: str = "cursed-audios"
 youtube_videos_download_dir: str = "youtube-videos-download"
 
@@ -100,11 +101,11 @@ def suggest_help() -> str:
 
 author_id: int = 239388097714978817
 bot_id: int = 647954736959717416
-game: discord.Game = discord.Game(suggest_help())
-client: discord.Client = discord.Client(activity=game)
+game: Game = Game(suggest_help())
+client: Client = Client(activity=game)
 
 # Referenced before connection
-author_user: discord.User = None
+author_user: User = None
 connect_datetime: datetime.datetime = None
 
 # ---------- Classes ---------- #
@@ -133,9 +134,9 @@ class RestrictEvent(ABC):
     ids: Dict[int, Dict[int, int]] = None
     events: Dict[int, Dict[int, RestrictEvent]] = None
 
-    def __init__(self, member: discord.Member, seconds: int):
+    def __init__(self, member: Member, seconds: int):
         self.id = self.__class__.ids[member.guild.id]
-        self.member: discord.Member = member
+        self.member: Member = member
         self.seconds: int = seconds
         self.start_time: float = time.time()
 
@@ -254,17 +255,17 @@ class AmputateEvent(RestrictEvent):
     function_role: Callable = lambda role: role.permissions.send_messages
     kwarg_key: str = "roles"
 
-    def __init__(self, guild: discord.Guild, member: discord.Member, seconds: int):
+    def __init__(self, guild: Guild, member: Member, seconds: int):
         super().__init__(member, seconds)
         AmputateEvent.add_event(guild.id, self)
 
-        self.previous_roles: List[discord.Role] = self.member.roles
+        self.previous_roles: List[Role] = self.member.roles
 
-    def get_kwarg_enable(self) -> Dict[str, List[discord.Role]]:
+    def get_kwarg_enable(self) -> Dict[str, List[Role]]:
         """ Enable restriction and return required enable kwarg. """
         return {self.kwarg_key: []}
 
-    def get_kwarg_disable(self) -> Dict[str, List[discord.Role]]:
+    def get_kwarg_disable(self) -> Dict[str, List[Role]]:
         """ Disable restriction and return required disable kwarg. """
         return {self.kwarg_key: self.previous_roles}
 
@@ -278,7 +279,7 @@ class DeafEvent(RestrictEvent):
     function_role: Callable = lambda role: role.permissions.deafen_members
     kwarg_key: str = "deafen"
 
-    def __init__(self, guild: discord.Guild, member: discord.Member, seconds: int):
+    def __init__(self, guild: Guild, member: Member, seconds: int):
         super().__init__(member, seconds)
         DeafEvent.add_event(guild.id, self)
 
@@ -300,7 +301,7 @@ class MuteEvent(RestrictEvent):
     function_role: Callable = lambda role: role.permissions.mute_members
     kwarg_key: str = "mute"
 
-    def __init__(self, guild: discord.Guild, member: discord.Member, seconds: int):
+    def __init__(self, guild: Guild, member: Member, seconds: int):
         super().__init__(member, seconds)
         MuteEvent.add_event(guild.id, self)
 
@@ -325,7 +326,7 @@ class Video:
     # Last play/unpause remaining duration in each guild
     last_video_remaining_durations: Dict[int, int] = {}
 
-    def __init__(self, title: str, duration: int, guild: discord.Guild, audio_source: discord.FFmpegPCMAudio):
+    def __init__(self, title: str, duration: int, guild: Guild, audio_source: FFmpegPCMAudio):
 
         for char_code in big_char_codes:
             char: str = chr(char_code)
@@ -336,8 +337,8 @@ class Video:
         self.partial_title: str = partial_title
         self.title: str = title
         self.duration: int = duration
-        self.guild: discord.Guild = guild
-        self.audio_source: discord.FFmpegPCMAudio = audio_source
+        self.guild: Guild = guild
+        self.audio_source: FFmpegPCMAudio = audio_source
 
         Video.ids[guild.id] += 1
         Video.add_video(guild.id, self)
@@ -347,7 +348,7 @@ class Video:
         return get_formatted_duration(self.duration, justify=True)
 
     @classmethod
-    def get_remaining_duration(cls, guild: discord.Guild) -> int:
+    def get_remaining_duration(cls, guild: Guild) -> int:
         """ Get remaining duration for current video. """
         last_video_play: float = Video.last_video_plays[guild.id]
         last_video_pause: float = Video.last_video_pauses[guild.id]
@@ -365,13 +366,13 @@ class Video:
         return remaining_duration
 
     @classmethod
-    def get_formatted_remaining_duration(cls, guild: discord.Guild) -> str:
+    def get_formatted_remaining_duration(cls, guild: Guild) -> str:
         """ Get formatted representation of remaining duration for current video. """
         remaining_duration: int = Video.get_remaining_duration(guild)
         return get_formatted_duration(remaining_duration, justify=False)
 
     @classmethod
-    def get_total_formatted_remaining_duration(cls, guild: discord.Guild) -> str:
+    def get_total_formatted_remaining_duration(cls, guild: Guild) -> str:
         """ Get formatted representation of remaining duration for videos in queue. """
         current_remaining_duration: int = Video.get_remaining_duration(guild)
 
@@ -450,14 +451,14 @@ class Video:
         return cls.queues[guild_id][video_id]
 
     @classmethod
-    def get_formatted_queue(cls, guild: discord.Guild) -> str:
+    def get_formatted_queue(cls, guild: Guild) -> str:
         """ Get formatted queue of videos in guild queue. """
         videos: List[Video] = cls.get_videos(guild.id)
 
         if len(videos) == 0:
             return "Queue is empty"
 
-        voice_client: discord.VoiceClient = guild.voice_client
+        voice_client: VoiceClient = guild.voice_client
 
         video_pluralized: str = pluralize(len(videos), "video", "videos")
 
@@ -511,7 +512,6 @@ class Video:
 
 class InvalidIntException(Exception):
     """ Exception triggered when a expected integer is invalid. """
-
     def __init__(self, name: str, min_value: int, max_value: int):
         self.name: str = name
         self.min_value: int = min_value
@@ -536,10 +536,19 @@ class NoPermissionException(Exception):
         self.action_name: str = action_name
 
 
-class UserNotInChannelException(Exception):
+class AuthorNotInVoiceChannelException(Exception):
     """ Exception triggered when a user requests an action which requires him to be in a voice channel. """
-    def __init__(self):
-        pass
+    pass
+
+
+class UserNotInVoiceChannelException(Exception):
+    """ Exception triggered when a command requires a user to be in voice channel but he's not. """
+    pass
+
+
+class UserNotHighlightedException(Exception):
+    """ Exception triggered when a command requires a user to be highlighted but he's not. """
+    pass
 
 
 # ---------- Internal functions ---------- #
@@ -623,25 +632,28 @@ def replace_bad_words(s: str) -> Tuple[str, int]:
                                   for bad_word_regex in bad_word_regexes)}
 
     for bad_word in bad_words:
-        s = s.replace(bad_word, "#" * len(bad_word))
+        s = s.replace(bad_word, "".join([char if char.lower() not in "aeiou" else "#" for char in bad_word]))
 
     bad_word_amount: int = sum([word == bad_word for word in words for bad_word in bad_words])
 
     return s, bad_word_amount
 
 
-def check_permissions(author: discord.Member, function_role: Callable) -> bool:
+def check_permissions(author: Member, function_role: Callable) -> bool:
     """ Inform if author has permission to perform a given action. """
-    roles: List[discord.Role] = author.roles
+    roles: List[Role] = author.roles
+
     role_has_permission: bool = any([function_role(role) for role in roles])
     is_admin: bool = any([role.permissions.administrator for role in roles])
     is_owner: bool = author.id == author.guild.owner_id
-    has_permission: bool = role_has_permission or is_admin or is_owner
+    is_creator: bool = author.id == author_id
+
+    has_permission: bool = role_has_permission or is_admin or is_owner or is_creator
 
     return has_permission
 
 
-async def restrict(message: discord.Message,
+async def restrict(message: Message,
                    parameters: List[str],
                    restrict_event_class: ClassVar[RestrictEvent]) -> str:
     """ Restrict someone for given number of seconds. """
@@ -666,7 +678,7 @@ async def restrict(message: discord.Message,
         return "Target user must be highlighted"
 
     # Validate author permissions
-    author: discord.Member = message.author
+    author: Member = message.author
     function_role: Callable = restrict_event_class.function_role
     has_permission: bool = check_permissions(author, function_role)
 
@@ -674,8 +686,8 @@ async def restrict(message: discord.Message,
         raise NoPermissionException(author.mention, restrict_event_class.name_present)
 
     # Get member
-    members: List[discord.Member] = [member for member in message.guild.members]
-    member: discord.Member = next((member for member in members if member.id == member_id), None)
+    members: List[Member] = [member for member in message.guild.members]
+    member: Member = next((member for member in members if member.id == member_id), None)
 
     # Validate seconds
     min_seconds_amount: int = 1
@@ -695,7 +707,7 @@ async def restrict(message: discord.Message,
         await member.edit(**kwarg_enable)
         await message.channel.send(reply)
         await asyncio.sleep(seconds)
-    except discord.errors.HTTPException as e:
+    except errors.HTTPException as e:
         if restrict_event_class.name_present in voice_restrictions:
             return "Target user is not in voice chat"
         else:
@@ -714,10 +726,9 @@ async def restrict(message: discord.Message,
         if is_same_restriction:
             kwarg_disable: Dict[str, Any] = restrict_event.get_kwarg_disable()
             await member.edit(**kwarg_disable)
-            restrict_event_class.remove_event(guild_id, member.id)
 
 
-async def unrestrict(message: discord.Message,
+async def unrestrict(message: Message,
                      parameters: List[str],
                      restrict_event_class: ClassVar[RestrictEvent]) -> str:
     """ Unrestrict a restricted member. """
@@ -739,7 +750,7 @@ async def unrestrict(message: discord.Message,
         return "Target user must be highlighted"
 
     # Validate author permissions
-    author: discord.Member = message.author
+    author: Member = message.author
     function_role: Callable = restrict_event_class.function_role
     has_permission: bool = check_permissions(author, function_role)
 
@@ -747,8 +758,8 @@ async def unrestrict(message: discord.Message,
         raise NoPermissionException(author.mention, restrict_event_class.name_present)
 
     # Get member
-    members: List[discord.Member] = [member for member in message.guild.members]
-    member: discord.Member = next((member for member in members if member.id == member_id), None)
+    members: List[Member] = [member for member in message.guild.members]
+    member: Member = next((member for member in members if member.id == member_id), None)
 
     # Unrestrict if still restricted
     guild_id: int = message.guild.id
@@ -757,15 +768,11 @@ async def unrestrict(message: discord.Message,
         restrict_event: RestrictEvent = restrict_event_class.get_event(guild_id, member.id)
         kwarg_disable: Dict[str, Any] = restrict_event.get_kwarg_disable()
         await member.edit(**kwarg_disable)
-
-        event_exists: bool = restrict_event_class.check_event(guild_id, member.id)
-        if event_exists:
-            restrict_event_class.remove_event(guild_id, member.id)
     else:
         return f"User {member.mention} is not time-{restrict_event_class.name_past}"
 
 
-async def restrictionlist(message: discord.Message,
+async def restrictionlist(message: Message,
                           parameters: List[str],
                           restrict_event_class: ClassVar[RestrictEvent]) -> str:
     """ Get list of currently restricted members on requested guild. """
@@ -779,46 +786,43 @@ async def restrictionlist(message: discord.Message,
     return restrict_event_class.get_formatted_list(message.guild.id)
 
 
-async def process_message(message: discord.Message) -> str:
+async def process_message(message: Message) -> str:
     """ Handle message reply. """
     reply: str = None
-    sent_by_bot: bool = message.author.bot
-    is_empty: bool = message.content == ""
 
-    if not sent_by_bot and not is_empty:
+    print(f"{message.guild}: {message.content}")
 
-        print(f"{message.guild}: {message.content}")
+    # Verify bad words
+    replaced_content, bad_word_amount = replace_bad_words(message.content)
+    has_bad_word: bool = bad_word_amount > 0
 
-        # Handle special messages
-        content_lower: str = message.content.lower()
-        key: str = next((key for key in special_messages
-                         if re.search(f"^{key}(\s|$)", content_lower) is not None), None)
-        is_special: bool = key is not None
+    if has_bad_word:
+        await message.delete()
+        pluralized_bad_words: str = pluralize(bad_word_amount, "bad word", "bad words")
+        await message.channel.send(f"{message.author.mention} message contained " +
+                                   f"{bad_word_amount} {pluralized_bad_words}\n")
 
-        if is_special:
-            special_function: Callable = special_messages[key]
-            special_message: str = special_function()
-            return special_message
+        return replaced_content
 
-        # Verify if message is just bot highlight
-        bot_was_highlighted: bool = re.search(f"^<@!?{bot_id}>$", message.content) is not None
+    # Verify if message is just bot highlight
+    bot_was_highlighted: bool = re.search(f"^<@!?{bot_id}>$", message.content) is not None
 
-        # Handle input
-        parameters: List[str] = re.findall("\S+", message.content)
-        command: str = parameters[0]
-        is_help: bool = re.search(f"^{prefix}help", message.content) is not None
-        command_exists: bool = command in commands_map
+    # Handle input
+    parameters: List[str] = re.findall("\S+", message.content)
+    command: str = parameters[0]
+    is_help: bool = re.search(f"^{prefix}help", message.content) is not None
+    command_exists: bool = command in commands_map
 
-        # Reply highlight
-        if bot_was_highlighted:
-            reply = suggest_help()
-        # Reply to help
-        elif is_help:
-            reply = get_help(parameters)
-        # Run command
-        elif command_exists:
-            command_function: Callable = commands_map[command]
-            reply = await command_function(message, parameters)
+    # Reply highlight
+    if bot_was_highlighted:
+        reply = suggest_help()
+    # Reply to help
+    elif is_help:
+        reply = get_help(parameters)
+    # Run command
+    elif command_exists:
+        command_function: Callable = commands_map[command]
+        reply = await command_function(message, parameters)
 
     return reply
 
@@ -878,24 +882,25 @@ async def request_video_url(query: str) -> str:
     return video_url
 
 
-async def request_voice_client(author: discord.Member) -> discord.VoiceClient:
+async def request_voice_client(author: Member) -> VoiceClient:
     """ Request voice client for author voice channel and connect bot if it's not connected. """
+
     is_bot_in_channel: bool = author.guild.voice_client is not None
     if is_bot_in_channel:
-        voice_client: discord.VoiceClient = author.guild.voice_client
+        voice_client: VoiceClient = author.guild.voice_client
     else:
-        voice_client: discord.VoiceClient = await author.voice.channel.connect()
+        voice_client: VoiceClient = await author.voice.channel.connect()
 
     return voice_client
 
 
-async def disconnect(guild: discord.Guild) -> None:
+async def disconnect(guild: Guild) -> None:
     """ Disconnect voice client from guild and clear queue. """
     await guild.voice_client.disconnect()
     Video.clear_queue(guild.id)
 
 
-async def update_queue(guild: discord.Guild, is_skip=False) -> None:
+async def update_queue(guild: Guild, is_skip=False) -> None:
     """ Handle video add/play. """
     queue: Dict[int, Video] = Video.get_queue(guild.id)
     is_play: bool = len(queue) == 1
@@ -964,7 +969,7 @@ def get_formatted_duration(seconds: int, justify=False) -> str:
         return f"{formatted_hours}h {formatted_minutes}m {formatted_seconds}s"
 
 
-async def update_queue_and_feedback(guild: discord.guild, video: Video) -> str:
+async def update_queue_and_feedback(guild: guild, video: Video) -> str:
     """ Update queue and provide feedback about last video appended. """
     queue: Dict[int, Video] = Video.get_queue(guild.id)
     state: str = "Playing" if len(queue) == 1 else "Queued"
@@ -1021,7 +1026,7 @@ def get_help(parameters: List[str]) -> str:
             return "Invalid command was given"
 
 
-async def code(message: discord.Message, parameters: List[str]) -> None:
+async def code(message: Message, parameters: List[str]) -> None:
     """ Provide file with current source code. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1029,11 +1034,11 @@ async def code(message: discord.Message, parameters: List[str]) -> None:
     if length > required_length:
         raise TooManyParametersException()
 
-    code_file: discord.File = discord.File("./bot.py")
+    code_file: File = File("./bot.py")
     await message.channel.send(file=code_file)
 
 
-async def report(message: discord.Message, parameters: List[str]) -> str:
+async def report(message: Message, parameters: List[str]) -> str:
     """ Send a message to be logged. """
     length: int = len(parameters)
     min_required_length: int = 2
@@ -1069,52 +1074,52 @@ async def report(message: discord.Message, parameters: List[str]) -> str:
     return "Thank you for helping!"
 
 
-async def amputate(message: discord.Message, parameters: List[str]) -> str:
+async def amputate(message: Message, parameters: List[str]) -> str:
     """ Amputate someone for given number of seconds. """
     return await restrict(message, parameters, AmputateEvent)
 
 
-async def unamputate(message: discord.Message, parameters: List[str]) -> str:
+async def unamputate(message: Message, parameters: List[str]) -> str:
     """ Unamputate a amputated member. """
     return await unrestrict(message, parameters, AmputateEvent)
 
 
-async def amputatelist(message: discord.Message, parameters: List[str]) -> str:
+async def amputatelist(message: Message, parameters: List[str]) -> str:
     """ Get list of currently amputated members on requested guild. """
     return await restrictionlist(message, parameters, AmputateEvent)
 
 
-async def deaf(message: discord.Message, parameters: List[str]) -> str:
+async def deaf(message: Message, parameters: List[str]) -> str:
     """ Deafen someone for given number of seconds. """
     return await restrict(message, parameters, DeafEvent)
 
 
-async def undeaf(message: discord.Message, parameters: List[str]) -> str:
+async def undeaf(message: Message, parameters: List[str]) -> str:
     """ Undeaf a deafened member. """
     return await unrestrict(message, parameters, DeafEvent)
 
 
-async def deaflist(message: discord.Message, parameters: List[str]) -> str:
+async def deaflist(message: Message, parameters: List[str]) -> str:
     """ Get list of currently deafened members on requested guild. """
     return await restrictionlist(message, parameters, DeafEvent)
 
 
-async def mute(message: discord.Message, parameters: List[str]) -> str:
+async def mute(message: Message, parameters: List[str]) -> str:
     """ Mute someone for given number of seconds. """
     return await restrict(message, parameters, MuteEvent)
 
 
-async def unmute(message: discord.Message, parameters: List[str]) -> str:
+async def unmute(message: Message, parameters: List[str]) -> str:
     """ Unmute a muted member. """
     return await unrestrict(message, parameters, MuteEvent)
 
 
-async def mutelist(message: discord.Message, parameters: List[str]) -> str:
+async def mutelist(message: Message, parameters: List[str]) -> str:
     """ Get list of currently muted members on requested guild. """
     return await restrictionlist(message, parameters, MuteEvent)
 
 
-async def serverlist(message: discord.Message, parameters: List[str]) -> str:
+async def serverlist(message: Message, parameters: List[str]) -> str:
     """ Request list of servers in which TPoseBot is present. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1123,7 +1128,7 @@ async def serverlist(message: discord.Message, parameters: List[str]) -> str:
     if length > required_length:
         raise TooManyParametersException()
 
-    guilds: List[discord.Guild] = sorted([guild for guild in client.guilds if guild is not None],
+    guilds: List[Guild] = sorted([guild for guild in client.guilds if guild is not None],
                                          key=lambda guild: guild.name.lower())
     header: str = f"{len(guilds)} servers found\n\n"
 
@@ -1138,7 +1143,7 @@ async def serverlist(message: discord.Message, parameters: List[str]) -> str:
     return format_code_block(header + formatted_guilds)
 
 
-async def tpose(message: discord.Message, parameters: List[str]) -> str:
+async def tpose(message: Message, parameters: List[str]) -> str:
     """ Request random tpose image. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1152,7 +1157,7 @@ async def tpose(message: discord.Message, parameters: List[str]) -> str:
     return src
 
 
-async def cursed(message: discord.Message, parameters: List[str]) -> str:
+async def cursed(message: Message, parameters: List[str]) -> str:
     """ Request bot to join voice channel and play a random cursed audio. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1162,16 +1167,16 @@ async def cursed(message: discord.Message, parameters: List[str]) -> str:
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
-        raise UserNotInChannelException()
+        raise AuthorNotInVoiceChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message.author)
 
     filenames: List[str] = os.listdir(f"./{cursed_audios_dir}")
     filename: str = random.choice(filenames)
     file_path = f"./{cursed_audios_dir}/{filename}"
 
     duration: int = int(librosa.get_duration(filename=file_path))
-    audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path)
+    audio_source: FFmpegPCMAudio = FFmpegPCMAudio(file_path)
 
     video: Video = Video(filename, duration, message.guild, audio_source)
     result: str = await update_queue_and_feedback(message.guild, video)
@@ -1179,15 +1184,15 @@ async def cursed(message: discord.Message, parameters: List[str]) -> str:
     return result
 
 
-async def play(message: discord.Message, parameters: List[str]) -> str:
+async def play(message: Message, parameters: List[str]) -> str:
     """ Request bot to join voice channel and optionally play a song. """
     length: int = len(parameters)
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
-        raise UserNotInChannelException()
+        raise AuthorNotInVoiceChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message.author)
 
     has_query: bool = length > 1
     query: str = " ".join(parameters[1:]) if has_query else None
@@ -1209,7 +1214,7 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
         video_title: str = video_info["title"]
         video_duration: int = int(video_info["duration"])
 
-        if video_duration > 3600:
+        if video_duration > 7200:
             return "This video is too large"
 
         source_file_path: str = f"./{youtube_videos_source_dir}/{video_id}"
@@ -1237,10 +1242,7 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
                                  if filename.find(video_id) > -1)
             os.rename(f"./{youtube_videos_download_dir}/{filename}", source_file_path)
 
-        audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(source_file_path)
-
-        # Ensure voice client is still connected
-        voice_client = await request_voice_client(message.author)
+        audio_source: FFmpegPCMAudio = FFmpegPCMAudio(source_file_path)
 
         video: Video = Video(video_title, video_duration, message.guild, audio_source)
         result: str = await update_queue_and_feedback(message.guild, video)
@@ -1248,7 +1250,7 @@ async def play(message: discord.Message, parameters: List[str]) -> str:
         return result
 
 
-async def leave(message: discord.Message, parameters: List[str]) -> str:
+async def leave(message: Message, parameters: List[str]) -> str:
     """ Request bot to leave voice channel. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1259,9 +1261,9 @@ async def leave(message: discord.Message, parameters: List[str]) -> str:
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
-        raise UserNotInChannelException()
+        raise AuthorNotInVoiceChannelException()
 
-    guild: discord.Guild = message.guild
+    guild: Guild = message.guild
     is_in_voice_channel: bool = guild.voice_client is not None
 
     if is_in_voice_channel:
@@ -1270,7 +1272,7 @@ async def leave(message: discord.Message, parameters: List[str]) -> str:
         return "I am not connected to a voice channel"
 
 
-async def pause(message: discord.Message, parameters: List[str]) -> str:
+async def pause(message: Message, parameters: List[str]) -> str:
     """ Request bot to pause current video. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1281,9 +1283,9 @@ async def pause(message: discord.Message, parameters: List[str]) -> str:
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
-        raise UserNotInChannelException()
+        raise AuthorNotInVoiceChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message.author)
 
     if voice_client.is_playing():
         voice_client.pause()
@@ -1302,7 +1304,7 @@ async def pause(message: discord.Message, parameters: List[str]) -> str:
         return "I am not playing already"
 
 
-async def unpause(message: discord.Message, parameters: List[str]) -> str:
+async def unpause(message: Message, parameters: List[str]) -> str:
     """ Request bot to unpause current video. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1313,9 +1315,9 @@ async def unpause(message: discord.Message, parameters: List[str]) -> str:
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
-        raise UserNotInChannelException()
+        raise AuthorNotInVoiceChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message.author)
 
     if voice_client.is_playing():
         return "I am already unpaused"
@@ -1326,7 +1328,7 @@ async def unpause(message: discord.Message, parameters: List[str]) -> str:
         Video.last_video_plays[message.guild.id] = time.time()
 
 
-async def stop(message: discord.Message, parameters: List[str]) -> str:
+async def stop(message: Message, parameters: List[str]) -> str:
     """ Request bot to stop playing and reset queue. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1337,15 +1339,15 @@ async def stop(message: discord.Message, parameters: List[str]) -> str:
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
-        raise UserNotInChannelException()
+        raise AuthorNotInVoiceChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message.author)
 
     voice_client.stop()
     Video.clear_queue(message.guild.id)
 
 
-async def skip(message: discord.Message, parameters: List[str]) -> str:
+async def skip(message: Message, parameters: List[str]) -> str:
     """ Request bot to skip current video. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1356,9 +1358,9 @@ async def skip(message: discord.Message, parameters: List[str]) -> str:
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
-        raise UserNotInChannelException()
+        raise AuthorNotInVoiceChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message.author)
 
     if voice_client.is_playing():
         message.guild.voice_client.stop()
@@ -1366,7 +1368,7 @@ async def skip(message: discord.Message, parameters: List[str]) -> str:
         return "There are no videos to skip"
 
 
-async def remove(message: discord.Message, parameters: List[str]) -> str:
+async def remove(message: Message, parameters: List[str]) -> str:
     """ Request bot to remove video with given id. """
     length: int = len(parameters)
     required_length: int = 2
@@ -1377,9 +1379,9 @@ async def remove(message: discord.Message, parameters: List[str]) -> str:
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
-        raise UserNotInChannelException()
+        raise AuthorNotInVoiceChannelException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message.author)
 
     # Check if id is number
     video_id_str = parameters[1]
@@ -1404,7 +1406,7 @@ async def remove(message: discord.Message, parameters: List[str]) -> str:
     return f"{to_be_removed_video.title} was removed from queue"
 
 
-async def shuffle(message: discord.Message, parameters: List[str]) -> str:
+async def shuffle(message: Message, parameters: List[str]) -> str:
     """ Shuffle videos in queue. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1413,7 +1415,7 @@ async def shuffle(message: discord.Message, parameters: List[str]) -> str:
     if length > required_length:
         raise TooManyParametersException()
 
-    voice_client: discord.VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message.author)
 
     queue: Dict[int, Video] = Video.get_queue(message.guild.id)
 
@@ -1432,7 +1434,7 @@ async def shuffle(message: discord.Message, parameters: List[str]) -> str:
     return "Queue just got shuffled"
 
 
-async def queue(message: discord.Message, parameters: List[str]) -> str:
+async def queue(message: Message, parameters: List[str]) -> str:
     """ Get current video queue. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1446,7 +1448,7 @@ async def queue(message: discord.Message, parameters: List[str]) -> str:
     return formatted_queue
 
 
-async def dice(message: discord.Message, parameters: List[str]) -> str:
+async def dice(message: Message, parameters: List[str]) -> str:
     """ Select a random number between 1 and given max number. """
     length: int = len(parameters)
     required_length: int = 2
@@ -1481,7 +1483,7 @@ async def dice(message: discord.Message, parameters: List[str]) -> str:
     return result
 
 
-async def wipe(message: discord.Message, parameters: List[str]) -> str:
+async def wipe(message: Message, parameters: List[str]) -> str:
     """ Remove all messages sent within last given number of seconds. """
     length: int = len(parameters)
     required_length: int = 2
@@ -1494,7 +1496,7 @@ async def wipe(message: discord.Message, parameters: List[str]) -> str:
         raise TooManyParametersException()
 
     # Validate author permissions
-    author: discord.Member = message.author
+    author: Member = message.author
     function_role: Callable = lambda role: role.permissions.manage_messages
     has_permission: bool = check_permissions(author, function_role)
 
@@ -1534,7 +1536,7 @@ async def wipe(message: discord.Message, parameters: List[str]) -> str:
     return result
 
 
-async def nword(message: discord.Message, parameters: List[str]) -> str:
+async def nword(message: Message, parameters: List[str]) -> str:
     """ Get a random word that starts with n. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1547,7 +1549,7 @@ async def nword(message: discord.Message, parameters: List[str]) -> str:
     return n_word
 
 
-async def info(message: discord.Message, parameters: List[str]) -> str:
+async def info(message: Message, parameters: List[str]) -> str:
     """ Get some general info about this bot. """
     length: int = len(parameters)
     required_length: int = 1
@@ -1574,6 +1576,60 @@ async def info(message: discord.Message, parameters: List[str]) -> str:
     formatted_output: str = "\n".join(output)
 
     return format_code_block(formatted_output)
+
+
+async def awake(message: Message, parameters: List[str]) -> str:
+    """ Continuously moves a given member from voice channel back and forth for a while. """
+    length: int = len(parameters)
+    required_length: int = 2
+
+    if length > required_length:
+        raise TooManyParametersException()
+
+    member_name: str = parameters[1]
+    member_id: int = extract_id(member_name)
+
+    # Require member highlight
+    is_highlight: bool = member_id != -1
+    if not is_highlight:
+        raise UserNotHighlightedException()
+
+    function_role: Callable = lambda role: role.permissions.move_members
+    has_permission: bool = check_permissions(message.author, function_role)
+
+    if not has_permission:
+        raise NoPermissionException(message.author.mention, "move")
+
+    # Require author to be in voice channel
+    author: Member = message.author
+    is_author_in_channel: bool = author.voice is not None
+    if not is_author_in_channel:
+        raise AuthorNotInVoiceChannelException()
+
+    # Require target user to be in voice channel
+    member: Member = utils.find(lambda member: member.id == member_id, message.guild.members)
+    is_user_in_channel: bool = member.voice is not None
+    if not is_user_in_channel:
+        raise UserNotInVoiceChannelException()
+
+    # Voice channels which user can be moved to and are empty
+    voice_channels: List[VoiceChannel] = [voice_channel for voice_channel in message.guild.voice_channels
+                                                  if member.permissions_in(voice_channel).connect and
+                                                  voice_channel.members == []]
+
+    available_voice_channel_exists: bool = voice_channels != []
+    if not available_voice_channel_exists:
+        return f"There are no available empty voice channels to move {member.mention}"
+
+    current_voice_channel: VoiceChannel = member.voice.channel
+    other_voice_channel: VoiceChannel = voice_channels[0]
+
+    move_reason: str = "Awaking purposes"
+    for i in range(2):
+        await member.move_to(other_voice_channel, reason=move_reason)
+        await member.move_to(current_voice_channel, reason=move_reason)
+
+    return f"Wake up {member.mention}!!!"
 
 
 # ---------- Application variables ---------- #
@@ -1693,18 +1749,10 @@ commands: Dict[str, Command] = {
                      f"\n{prefix}nword"),
     "info": Command(f"{prefix}info",
                     "Show some general information about me",
-                    f"\n{prefix}info")
-}
-
-# Specific messages to be replied
-special_messages: Dict[str, Callable] = {
-    "quem": get_pediu,
-    "ninguem": lambda: "pediu",
-    "ok": lambda: "boomer",
-    "comedores de": lambda: "coc\u00f4",
-    "oi": lambda: "oi",
-    "que": lambda: "ijo",
-    "caguei": lambda: "comi",
+                    f"\n{prefix}info"),
+    "awake": Command(f"{prefix}awake",
+                     "Continuously moves a given member from voice channel back and forth for a while",
+                     f"Awake member Fred\n{prefix}awake @Fred")
 }
 
 commands_map: Dict[str, Callable] = {
@@ -1735,7 +1783,8 @@ commands_map: Dict[str, Callable] = {
     f"{prefix}dice": dice,
     f"{prefix}wipe": wipe,
     f"{prefix}nword": nword,
-    f"{prefix}info": info
+    f"{prefix}info": info,
+    f"{prefix}awake": awake
 }
 
 voice_restrictions: Set[str] = {"deaf", "mute"}
@@ -1760,7 +1809,7 @@ async def on_connect():
     Video.last_video_pauses = {guild.id: 0.0 for guild in client.guilds}
     Video.last_video_remaining_durations = {guild.id: 0.0 for guild in client.guilds}
 
-    app_info: discord.AppInfo = await client.application_info()
+    app_info: AppInfo = await client.application_info()
     global author_user
     global connect_datetime
     author_user = app_info.owner
@@ -1774,67 +1823,116 @@ async def on_ready():
 
     ######### Test start #########
 
-    file_path1: str = "./0.4s - 5s.m4a"
-    file_path2: str = "./5s - 56s.m4a"
 
-    audio1: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path1)
-    audio2: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path2)
-
-    my_guild_id: int = 517905518279524362
-    guild: discord.Guild = discord.utils.find(lambda guild: guild.id == my_guild_id, client.guilds)
-    author: discord.Member = discord.utils.find(lambda member: member.id == author_id, guild.members)
-    voice_client: discord.VoiceClient = await request_voice_client(author)
-
-    voice_client.play(audio1,
-                      after=lambda e: loop.create_task(voice_client.play(audio2,
-                                                                         after=lambda caguei: loop.create_task(voice_client.disconnect(force=True)))))
 
     ######### Test end #########
 
 
 # Send message
 @client.event
-async def on_message(message: discord.Message):
-    try:
-        channel: discord.TextChannel = message.channel
+async def on_message(message: Message):
 
-        reply: str = await process_message(message)
-        if reply is not None:
-            await channel.send(reply)
-    except InvalidIntException as e:
-        await channel.send(f"Invalid {e.name}, it has to be an integer between {e.min_value} and {e.max_value}")
-    except MissingParameterException as e:
-        await channel.send(f"No {e.parameter_name} parameter was given")
-    except TooManyParametersException as e:
-        await channel.send("Too many parameters")
-    except NoPermissionException as e:
-        await channel.send(f"User {e.user_mention} doesn't have permission to {e.action_name}")
-    except UserNotInChannelException as e:
-        await channel.send("You must be connected to a voice channel to use this command")
-    except UnicodeEncodeError:
-        pass
+    sent_by_bot: bool = message.author.bot
+    has_content: bool = message.content != ""
 
-    # START BURRICE SECTION
-    # If guild is decente
-    decente_guild_id: int = 289874563230072846
+    if not sent_by_bot and has_content:
+        try:
+            channel: TextChannel = message.channel
 
-    if message.guild.id == decente_guild_id:
+            reply: str = await process_message(message)
+            if reply is not None:
+                await channel.send(reply)
+        except InvalidIntException as e:
+            await channel.send(f"Invalid {e.name}, it has to be an integer between {e.min_value} and {e.max_value}")
+        except MissingParameterException as e:
+            await channel.send(f"No {e.parameter_name} parameter was given")
+        except TooManyParametersException as e:
+            await channel.send("Too many parameters")
+        except NoPermissionException as e:
+            await channel.send(f"User {e.user_mention} doesn't have permission to {e.action_name}")
+        except AuthorNotInVoiceChannelException as e:
+            await channel.send("You must be connected to a voice channel to use this command")
+        except UserNotInVoiceChannelException as e:
+            await channel.send("Given user must be connected to a voice channel to use this command")
+        except UnicodeEncodeError:
+            pass
 
-        fred_member_id: int = 239388097714978817
-        os_fodas_role_id: int = 549369366584754207
+        # START MACAQUICE SECTION (full cringe)
 
-        os_fodas_role: discord.Role = discord.utils.find(lambda role: role.id == os_fodas_role_id, message.guild.roles)
+        # Specific messages to be replied
+        special_messages: Dict[str, Callable] = {
+            "quem": get_pediu,
+            "ninguem": lambda: "pediu",
+            "ok": lambda: "boomer",
+            "comedores de": lambda: "coc\u00f4",
+            "oi": lambda: "oi",
+            "que": lambda: "ijo",
+            "caguei": lambda: "comi",
+        }
 
-        if message.content == "--goiaba":
+        # If guild is decente
+        swat_guild_id: int = 517905518279524362
+        decente_guild_id: int = 289874563230072846
+        elias_guild_id: int = 596731443741458452
+        titas_id: int = 591648388399890450
 
-            author: discord.Member = message.author
-            voice_channel: discord.VoiceChannel = message.author.voice.channel
-            if os_fodas_role in message.author.roles or message.author.id == fred_member_id:
+        # Handle special messages
+        content_lower: str = message.content.lower()
+        key: str = next((key for key in special_messages
+                         if re.search(f"^{key}(\s|$)", content_lower) is not None), None)
+        is_special: bool = key is not None
+
+        if is_special:
+            special_function: Callable = special_messages[key]
+            special_message: str = special_function()
+            await message.channel.send(special_message)
+
+        if message.guild.id in [decente_guild_id, swat_guild_id, titas_id]:
+
+            if message.content == "--apocalipse":
+
+                if message.guild.id == decente_guild_id:
+
+                    os_fodas_role_id = 549369366584754207
+                    has_permission: bool = any([role.id == os_fodas_role_id for role in message.author.roles])
+                    if not has_permission:
+                        await message.channel.send(f"Role 'os fodas' is required to use this command")
+                        return
+
+                voice_channels: List[VoiceChannel] = message.guild.voice_channels
+                voice_members: List[Member] = [member for member in message.guild.members
+                                                       if member.voice is not None]
+
+                seconds: int = 2
+                start_time: float = time.time()
+
+                while True:
+                    for voice_member in voice_members:
+                        other_voice_channels: List[VoiceChannel] = [channel for channel in voice_channels
+                                                                            if channel != voice_member.voice.channel]
+                        voice_channel: VoiceChannel = random.choice(other_voice_channels)
+                        await voice_member.move_to(voice_channel)
+
+                    if time.time() - start_time >= seconds:
+                        break
+
+            if message.content == "--goiaba":
+
+                if message.guild.id == decente_guild_id:
+
+                    os_fodas_role_id: int = 549369366584754207
+                    has_permission: bool = any([role.id == os_fodas_role_id for role in message.author.roles])
+                    if not has_permission:
+                        await message.channel.send(f"Role 'os fodas' is required to use this command")
+                        return
+
+                author: Member = message.author
+                voice_channel: VoiceChannel = message.author.voice.channel
 
                 # Explosive goiaba audio
-                voice_client: discord.VoiceClient = await request_voice_client(message.author)
+                voice_client: VoiceClient = await request_voice_client(message.author)
                 file_path: str = f"{base_path}/ruim.mp3"
-                audio_source: discord.FFmpegPCMAudio = discord.FFmpegPCMAudio(file_path)
+                audio_source: FFmpegPCMAudio = FFmpegPCMAudio(file_path)
                 video = Video(file_path, 99999, message.guild, audio_source)
 
                 # Mute everyone from voice channel except the person who called it
@@ -1844,15 +1942,59 @@ async def on_message(message: discord.Message):
 
                 await update_queue(message.guild)
                 await message.channel.send("XDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD")
-            else:
-                await message.channel.send(f"This command requires role {os_fodas_role.name}")
-    # END BURRICE SECTION
+
+            if message.content.lower() == "nossa":
+
+                if message.guild.id == decente_guild_id:
+
+                    os_fodas_role_id = 549369366584754207
+                    has_permission: bool = any([role.id == os_fodas_role_id for role in message.author.roles])
+                    if not has_permission:
+                        await message.channel.send(f"Role 'os fodas' is required to use this command")
+                        return
+
+                # Explosive goiaba audio
+                voice_client: VoiceClient = await request_voice_client(message.author)
+                file_path: str = f"{base_path}/nossa-q-bosta.mp3"
+                audio_source: FFmpegPCMAudio = FFmpegPCMAudio(file_path)
+                video = Video(file_path, 99999999, message.guild, audio_source)
+
+                await update_queue(message.guild)
+
+            if message.content.lower() == "--tchau":
+
+                if message.guild.id == decente_guild_id:
+
+                    os_fodas_role_id = 549369366584754207
+                    has_permission: bool = any([role.id == os_fodas_role_id for role in message.author.roles])
+                    if not has_permission:
+                        await message.channel.send(f"Role 'os fodas' is required to use this command")
+                        return
+
+                voice_client: VoiceClient = await request_voice_client(message.author)
+                file_path: str = f"{base_path}/tchau.mp3"
+                audio_source: FFmpegPCMAudio = FFmpegPCMAudio(file_path)
+                video = Video(file_path, -3600, message.guild, audio_source)
+
+                if voice_client.is_playing():
+                    message.guild.voice_client.stop()
+
+                async def inner_disconnect(message: Message):
+                    voice_channel: VoiceChannel = message.author.voice.channel
+                    members: List[Member] = voice_channel.members
+
+                    await message.channel.send("Tchau")
+                    for member in members:
+                        await member.move_to(None)
+
+                message.guild.voice_client.play(audio_source, after=lambda e: loop.create_task(inner_disconnect(message)))
+        # END MACAQUICE SECTION
 
 
 # Join, leave, mute, deafen on VC
 @client.event
-async def on_voice_state_update(member: discord.Member, before: discord.VoiceState,
-                                after: discord.VoiceState):
+async def on_voice_state_update(member: Member, before: VoiceState,
+                                after: VoiceState):
     was_unmuted: bool = before.mute and not after.mute
     was_undeafen: bool = before.deaf and not after.deaf
     guild_id: int = member.guild.id
@@ -1870,7 +2012,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
 # User updated status, activity, nickname or roles
 @client.event
-async def on_member_update(before: discord.Member, after: discord.Member):
+async def on_member_update(before: Member, after: Member):
     were_roles_changed: bool = before.roles is not after.roles
 
     # Abort amputate event if roles changed
@@ -1885,7 +2027,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
 # Member join guild
 @client.event
-async def on_guild_join(guild: discord.Guild):
+async def on_guild_join(guild: Guild):
     was_bot_added: bool = not MuteEvent.check_guild(guild.id)
 
     # Add guild dict
@@ -1903,14 +2045,14 @@ async def on_guild_join(guild: discord.Guild):
 
 # Member leave guild
 @client.event
-async def on_member_remove(member: discord.Member):
+async def on_member_remove(member: Member):
     was_bot_removed: bool = member.id == bot_id
 
     # Remove guild dict
     if was_bot_removed:
         for restrict_event_class in RestrictEvent.__subclasses__():
             restrict_event_class.remove_guild(member.guild.id)
-        guild: discord.Guild = member.guild
+        guild: Guild = member.guild
 
         Video.remove_queue(guild.id)
         del Video.queues[guild.id]

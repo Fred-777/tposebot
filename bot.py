@@ -37,7 +37,6 @@ sc_param: str = os.getenv("sc_param")
 
 bad_words_path: str = "./bad-words.txt"
 extra_srcs_path: str = "./extra-srcs.txt"
-report_path: str = "./reports.txt"
 
 youtube_videos_source_dir: str = "youtube-videos"
 cursed_audios_dir: str = "cursed-audios"
@@ -83,13 +82,6 @@ with open(extra_srcs_path) as file:
     data: str = file.read()
     extra_srcs: List[str] = json.loads(data)
 
-with open(report_path) as file:
-    data: str = file.read()
-    try:
-        reports: Set[str] = set(json.loads(data))
-    except json.JSONDecodeError:
-        reports: Set[str] = set()
-
 
 # ---------- Class helpers ---------- #
 
@@ -108,11 +100,11 @@ client: Client = Client(activity=game)
 author_user: User = None
 connect_datetime: datetime.datetime = None
 
+
 # ---------- Classes ---------- #
 
 class Command:
     """ Describe a command available from bot. """
-
     def __init__(self, name: str, description: str, example: str):
         self.name = name
         self.description = description
@@ -143,7 +135,7 @@ class RestrictEvent(ABC):
         self.__class__.ids[member.guild.id] += 1
 
     def get_remaining_seconds(self) -> int:
-        """ Calculate amount of remaining seconds to end mute. """
+        """ Calculate amount of remaining seconds to end restriction. """
         seconds_passed: int = int(time.time() - self.start_time)
         remaining_seconds: int = self.seconds - seconds_passed
         return remaining_seconds
@@ -512,6 +504,7 @@ class Video:
 
 class InvalidIntException(Exception):
     """ Exception triggered when a expected integer is invalid. """
+
     def __init__(self, name: str, min_value: int, max_value: int):
         self.name: str = name
         self.min_value: int = min_value
@@ -520,6 +513,7 @@ class InvalidIntException(Exception):
 
 class MissingParameterException(Exception):
     """ Exception triggered when a command doesn't receive a required parameter. """
+
     def __init__(self, parameter_name: str):
         self.parameter_name: str = parameter_name
 
@@ -531,6 +525,7 @@ class TooManyParametersException(Exception):
 
 class NoPermissionException(Exception):
     """ Exception triggered when a user requests an action which he doesn't have permission to execute. """
+
     def __init__(self, user_mention: str, action_name: str):
         self.user_mention: str = user_mention
         self.action_name: str = action_name
@@ -937,18 +932,9 @@ def count_big_chars(s: str) -> int:
     return sum(ord(char) in big_char_codes for char in s)
 
 
-async def get_current_datetime() -> datetime.datetime:
+def get_current_datetime() -> datetime.datetime:
     """ Request current UTC time and get datetime object from it. """
-    url: str = "https://www.epochconverter.com"
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            content: str = await response.text()
-            soup: bs4.BeautifulSoup = bs4.BeautifulSoup(content, features="lxml")
-            element: bs4.element.Tag = soup.select_one("#ecclock")
-            timestamp: int = int(element.text)
-
-    return datetime.datetime.fromtimestamp(timestamp).now() + datetime.timedelta(hours=0, seconds=15)
+    return datetime.datetime.fromtimestamp(time.time()) + datetime.timedelta(hours=3, seconds=50)
 
 
 def get_formatted_duration(seconds: int, justify=False) -> str:
@@ -1034,44 +1020,8 @@ async def code(message: Message, parameters: List[str]) -> None:
     if length > required_length:
         raise TooManyParametersException()
 
-    code_file: File = File("./bot.py")
+    code_file: File = File(".stable-/bot.py")
     await message.channel.send(file=code_file)
-
-
-async def report(message: Message, parameters: List[str]) -> str:
-    """ Send a message to be logged. """
-    length: int = len(parameters)
-    min_required_length: int = 2
-
-    if length < min_required_length:
-        raise MissingParameterException("message")
-
-    content: str = message.content
-    report_message_match: re.Match = re.search(f"{prefix}report\s+", content)
-    report_message_index: int = report_message_match.end()
-    report_message: str = content[report_message_index:]
-
-    is_duplicate: bool = report_message in reports
-    is_spam: bool = check_spam(report_message)
-
-    # Check bad words
-    replaced_content: str
-    bad_word_amount: int
-    replaced_content, bad_word_amount = replace_bad_words(message.content)
-    has_bad_word: bool = bad_word_amount > 0
-
-    if is_duplicate:
-        return "This message was already sent"
-    if is_spam:
-        return "Your message was detected as spam and got filtered"
-    if has_bad_word:
-        return "Your message has bad words and got filtered"
-
-    reports.add(report_message)
-    with open(report_path, "w") as file:
-        reports_json: str = json.dumps(list(reports), indent=4)
-        file.write(reports_json)
-    return "Thank you for helping!"
 
 
 async def amputate(message: Message, parameters: List[str]) -> str:
@@ -1129,7 +1079,7 @@ async def serverlist(message: Message, parameters: List[str]) -> str:
         raise TooManyParametersException()
 
     guilds: List[Guild] = sorted([guild for guild in client.guilds if guild is not None],
-                                         key=lambda guild: guild.name.lower())
+                                 key=lambda guild: guild.name.lower())
     header: str = f"{len(guilds)} servers found\n\n"
 
     name_lengths: Set[int] = {len(guild.name) for guild in guilds}
@@ -1515,7 +1465,7 @@ async def wipe(message: Message, parameters: List[str]) -> str:
 
     total_seconds: int = int(total_seconds_str)
 
-    now: datetime.datetime = await get_current_datetime()
+    now: datetime.datetime = get_current_datetime()
     date: datetime.datetime = now - datetime.timedelta(seconds=total_seconds)
     message_amount: int = 0
     limit: int = 500
@@ -1560,9 +1510,9 @@ async def info(message: Message, parameters: List[str]) -> str:
     language_name: str = "Python"
     language_version: str = get_python_version()
 
-    start_date: str = "Early december 2019"
+    start_date: str = "23/11/2019"
 
-    current_datetime: datetime.datetime = await get_current_datetime()
+    current_datetime: datetime.datetime = get_current_datetime()
     seconds_difference: int = get_seconds_difference(connect_datetime, current_datetime)
     active_time: str = get_formatted_duration(seconds_difference)
 
@@ -1614,8 +1564,8 @@ async def awake(message: Message, parameters: List[str]) -> str:
 
     # Voice channels which user can be moved to and are empty
     voice_channels: List[VoiceChannel] = [voice_channel for voice_channel in message.guild.voice_channels
-                                                  if member.permissions_in(voice_channel).connect and
-                                                  voice_channel.members == []]
+                                          if member.permissions_in(voice_channel).connect and
+                                          voice_channel.members == []]
 
     available_voice_channel_exists: bool = voice_channels != []
     if not available_voice_channel_exists:
@@ -1670,10 +1620,6 @@ commands: Dict[str, Command] = {
     "code": Command(f"{prefix}code",
                     "Provide file with my current source code",
                     f"\n{prefix}code"),
-    "report": Command(f"{prefix}report",
-                      "Send a message to developer (report a bug, request a feature, etc)",
-                      (f"Report a permission related bug" +
-                       f"\n{prefix}report administrators are not having permission to mute")),
     "amputate": Command(f"{prefix}amputate",
                         ("Amputate user for a given number of seconds, removing all attached roles, " +
                          "event is aborted if target member roles are updated while it runs"),
@@ -1758,7 +1704,6 @@ commands: Dict[str, Command] = {
 commands_map: Dict[str, Callable] = {
     f"{prefix}help": get_help,
     f"{prefix}code": code,
-    f"{prefix}report": report,
     f"{prefix}amputate": amputate,
     f"{prefix}unamputate": unamputate,
     f"{prefix}amputatelist": amputatelist,
@@ -1813,7 +1758,7 @@ async def on_connect():
     global author_user
     global connect_datetime
     author_user = app_info.owner
-    connect_datetime = await get_current_datetime()
+    connect_datetime = get_current_datetime()
 
 
 # Bot ready
@@ -1823,15 +1768,12 @@ async def on_ready():
 
     ######### Test start #########
 
-
-
     ######### Test end #########
 
 
 # Send message
 @client.event
 async def on_message(message: Message):
-
     sent_by_bot: bool = message.author.bot
     has_content: bool = message.content != ""
 
@@ -1870,11 +1812,13 @@ async def on_message(message: Message):
             "caguei": lambda: "comi",
         }
 
-        # If guild is decente
+        # If guild is allowed
         swat_guild_id: int = 517905518279524362
         decente_guild_id: int = 289874563230072846
         elias_guild_id: int = 596731443741458452
         titas_id: int = 591648388399890450
+        tcho_id: int = 649129370442530826
+        habbo_hell_id: int = 690983157805088778
 
         # Handle special messages
         content_lower: str = message.content.lower()
@@ -1887,7 +1831,7 @@ async def on_message(message: Message):
             special_message: str = special_function()
             await message.channel.send(special_message)
 
-        if message.guild.id in [decente_guild_id, swat_guild_id, titas_id]:
+        if message.guild.id in [decente_guild_id, swat_guild_id, titas_id, tcho_id, habbo_hell_id]:
 
             if message.content == "--apocalipse":
 
@@ -1901,7 +1845,7 @@ async def on_message(message: Message):
 
                 voice_channels: List[VoiceChannel] = message.guild.voice_channels
                 voice_members: List[Member] = [member for member in message.guild.members
-                                                       if member.voice is not None]
+                                               if member.voice is not None]
 
                 seconds: int = 2
                 start_time: float = time.time()
@@ -1909,7 +1853,7 @@ async def on_message(message: Message):
                 while True:
                     for voice_member in voice_members:
                         other_voice_channels: List[VoiceChannel] = [channel for channel in voice_channels
-                                                                            if channel != voice_member.voice.channel]
+                                                                    if channel != voice_member.voice.channel]
                         voice_channel: VoiceChannel = random.choice(other_voice_channels)
                         await voice_member.move_to(voice_channel)
 
@@ -1987,7 +1931,8 @@ async def on_message(message: Message):
                     for member in members:
                         await member.move_to(None)
 
-                message.guild.voice_client.play(audio_source, after=lambda e: loop.create_task(inner_disconnect(message)))
+                message.guild.voice_client.play(audio_source,
+                                                after=lambda e: loop.create_task(inner_disconnect(message)))
         # END MACAQUICE SECTION
 
 
@@ -2050,9 +1995,9 @@ async def on_member_remove(member: Member):
 
     # Remove guild dict
     if was_bot_removed:
-        for restrict_event_class in RestrictEvent.__subclasses__():
-            restrict_event_class.remove_guild(member.guild.id)
         guild: Guild = member.guild
+        for restrict_event_class in RestrictEvent.__subclasses__():
+            restrict_event_class.remove_guild(guild.id)
 
         Video.remove_queue(guild.id)
         del Video.queues[guild.id]
@@ -2062,4 +2007,13 @@ async def on_member_remove(member: Member):
         del Video.last_video_remaining_durations[guild.id]
 
 
+# Bot disconnects
+@client.event
+async def on_disconnect():
+    await client.connect()
+
 client.run(token)
+
+
+
+

@@ -123,8 +123,8 @@ class Command:
 
 class RestrictEvent(ABC):
     """ Base class for member restriction event management. """
-    ids: Dict[int, Dict[int, int]] = None
-    events: Dict[int, Dict[int, RestrictEvent]] = None
+    ids: Dict[int, int] = {}
+    events: Dict[int, Dict[int, RestrictEvent]] = {}
 
     def __init__(self, member: Member, seconds: int):
         self.id = self.__class__.ids[member.guild.id]
@@ -172,12 +172,14 @@ class RestrictEvent(ABC):
 
     @classmethod
     def add_guild(cls, guild_id: int) -> None:
-        """ Add guild to event dict. """
+        """ Add guild as a instance container. """
+        cls.ids[guild_id] = 1
         cls.events[guild_id] = {}
 
     @classmethod
     def remove_guild(cls, guild_id: int) -> None:
-        """ Remove guild from event dict. """
+        """ Remove guild as a instance container. """
+        del cls.ids[guild_id]
         del cls.events[guild_id]
 
     @classmethod
@@ -240,7 +242,7 @@ class RestrictEvent(ABC):
 
 class AmputateEvent(RestrictEvent):
     """ Amputate event on progress. """
-    events: Dict[int, Dict[int, RestrictEvent]] = None
+    events: Dict[int, Dict[int, AmputateEvent]] = {}
 
     name_present: str = "amputate"
     name_past: str = "amputated"
@@ -264,7 +266,7 @@ class AmputateEvent(RestrictEvent):
 
 class DeafEvent(RestrictEvent):
     """ Deaf event on progress. """
-    events: Dict[int, Dict[int, RestrictEvent]] = None
+    events: Dict[int, Dict[int, DeafEvent]] = {}
 
     name_present: str = "deaf"
     name_past: str = "deafened"
@@ -286,7 +288,7 @@ class DeafEvent(RestrictEvent):
 
 class MuteEvent(RestrictEvent):
     """ Mute event on progress. """
-    events: Dict[int, Dict[int, RestrictEvent]] = None
+    events: Dict[int, Dict[int, MuteEvent]] = {}
 
     name_present: str = "mute"
     name_past: str = "muted"
@@ -310,20 +312,21 @@ class Video:
     """ Represent a video to be played. """
     ids: Dict[int, int] = {}
     queues: Dict[int, Dict[int, Video]] = {}
+    loops: Dict[int, bool] = {}
 
     # Last play/unpause timestamp in each guild
-    last_video_plays: Dict[int, float] = {}
+    last_video_plays: Dict[int, float] = None
     # Last pause timestamp in each guild
-    last_video_pauses: Dict[int, float] = {}
+    last_video_pauses: Dict[int, float] = None
     # Last play/unpause remaining duration in each guild
-    last_video_remaining_durations: Dict[int, int] = {}
+    last_video_remaining_durations: Dict[int, int] = None
 
     def __init__(self, title: str, duration: int, guild: Guild, audio_source: FFmpegPCMAudio):
 
         for char_code in big_char_codes:
             char: str = chr(char_code)
             title = title.replace(char, " ")
-        partial_title: str = title if len(title) <= 50 else f"{title[: 47]}..."
+        partial_title: str = title if len(title) <= 40 else f"{title[: 37]}..."
 
         self.id: int = Video.ids[guild.id]
         self.partial_title: str = partial_title
@@ -380,12 +383,22 @@ class Video:
     @classmethod
     def add_queue(cls, guild_id: int) -> None:
         """ Add video dict to guild dict. """
-        cls.queues[guild_id] = {}
+        cls.queues[guild.id] = {}
+        cls.ids[guild.id] = 1
+        cls.loops[guild_id] = False
+        cls.last_video_plays[guild.id] = 0.0
+        cls.last_video_pauses[guild.id] = 0.0
+        cls.last_video_remaining_durations[guild.id] = 0
 
     @classmethod
     def remove_queue(cls, guild_id: int) -> None:
         """ Remove video dict from guild dict. """
-        del cls.queues[guild_id]
+        del cls.queues[guild.id]
+        del cls.ids[guild.id]
+        del cls.loops[guild_id]
+        del cls.last_video_plays[guild.id]
+        del cls.last_video_pauses[guild.id]
+        del cls.last_video_remaining_durations[guild.id]
 
     @classmethod
     def get_queue(cls, guild_id: int) -> Dict[int, Video]:
@@ -456,6 +469,8 @@ class Video:
 
         is_playing: bool = voice_client.is_playing()
         is_paused: bool = voice_client.is_paused()
+        is_looping: bool = Video.loops[guild.id]
+
         video_state: str = "Playing" if is_playing else "Paused" if is_paused else "Downloading"
 
         id_header: str = "ID"
@@ -478,6 +493,7 @@ class Video:
 
         header: str = (f"{len(videos)} {video_pluralized} found\n" +
                        f"Current state: {video_state}\n" +
+                       f"Is looping: {'✓' if is_looping else '✗'}\n" +
                        f"Current remaining: {formatted_remaining_duration}\n" +
                        f"Total remaining: {formatted_total_remaining_duration}\n\n")
 
@@ -641,9 +657,9 @@ def check_permissions(author: Member, function_role: Callable) -> bool:
     role_has_permission: bool = any([function_role(role) for role in roles])
     is_admin: bool = any([role.permissions.administrator for role in roles])
     is_owner: bool = author.id == author.guild.owner_id
-    is_creator: bool = author.id == author_id
+    # is_creator: bool = author.id == author_id
 
-    has_permission: bool = role_has_permission or is_admin or is_owner or is_creator
+    has_permission: bool = role_has_permission or is_admin or is_owner
 
     return has_permission
 
@@ -899,15 +915,17 @@ async def update_queue(guild: Guild, is_skip=False) -> None:
     """ Handle video add/play. """
     queue: Dict[int, Video] = Video.get_queue(guild.id)
     is_play: bool = len(queue) == 1
+    is_looping: bool = Video.loops[guild.id]
 
     try:
         if is_skip:
-            Video.remove_next_video(guild.id)
+            if not is_looping:
+                Video.remove_next_video(guild.id)
             guild.voice_client.stop()
         next_video: Video = Video.get_next_video(guild.id)
         if not guild.voice_client.is_playing():
             guild.voice_client.play(next_video.audio_source,
-                                    after=lambda e: loop.create_task(update_queue(guild, is_skip=True)))
+                                    after=lambda e: event_loop.create_task(update_queue(guild, is_skip=True)))
 
         # Update remaining duration on video play / skip and last play/pause timestamp
         if is_play or is_skip:
@@ -934,7 +952,7 @@ def count_big_chars(s: str) -> int:
 
 def get_current_datetime() -> datetime.datetime:
     """ Request current UTC time and get datetime object from it. """
-    return datetime.datetime.fromtimestamp(time.time()) + datetime.timedelta(hours=3, seconds=50)
+    return datetime.datetime.fromtimestamp(time.time()) + datetime.timedelta(hours=3, seconds=58)
 
 
 def get_formatted_duration(seconds: int, justify=False) -> str:
@@ -1020,7 +1038,7 @@ async def code(message: Message, parameters: List[str]) -> None:
     if length > required_length:
         raise TooManyParametersException()
 
-    code_file: File = File(".stable-/bot.py")
+    code_file: File = File("./stable-bot.py")
     await message.channel.send(file=code_file)
 
 
@@ -1157,8 +1175,8 @@ async def play(message: Message, parameters: List[str]) -> str:
         video_id: str = re.search("(?<=v=)[\w\-]{11}", url)[0]
 
         with youtube_dl.YoutubeDL() as ydl:
-            video_info: Dict = await loop.run_in_executor(None,
-                                                          lambda: ydl.extract_info(url,
+            video_info: Dict = await event_loop.run_in_executor(None,
+                                                                lambda: ydl.extract_info(url,
                                                                                    download=False))
 
         video_title: str = video_info["title"]
@@ -1184,8 +1202,8 @@ async def play(message: Message, parameters: List[str]) -> str:
             }
 
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                await loop.run_in_executor(None,
-                                           lambda: ydl.download([url]))
+                await event_loop.run_in_executor(None,
+                                                 lambda: ydl.download([url]))
 
             filenames: Generator[str] = (filename for filename in os.listdir(youtube_videos_download_dir))
             filename: str = next(filename for filename in filenames
@@ -1418,8 +1436,6 @@ async def dice(message: Message, parameters: List[str]) -> str:
 
     if not is_max_num_valid:
         raise InvalidIntException("max number", min_value, max_value)
-        return ("Invalid max number, it has to be an integer " +
-                f"between {min_value} and {max_value}")
 
     min_num: int = 1
     max_num: int = int(max_num_str)
@@ -1582,6 +1598,21 @@ async def awake(message: Message, parameters: List[str]) -> str:
     return f"Wake up {member.mention}!!!"
 
 
+async def loop(message: Message, parameters: List[str]) -> str:
+    """ Toggle loop value for current guild. """
+    length: int = len(parameters)
+    required_length: int = 1
+
+    if length > required_length:
+        raise TooManyParametersException()
+
+    current_loop_value: bool = Video.loops[message.guild.id]
+    next_loop_value: bool = not current_loop_value
+
+    Video.loops[message.guild.id] = next_loop_value
+    return f"Loop value was changed to {next_loop_value}"
+
+
 # ---------- Application variables ---------- #
 
 async def TODO(video_id: str):
@@ -1602,7 +1633,7 @@ async def TODO(video_id: str):
 
 
 # Async scheduler
-loop: asyncio.ProactorEventLoop = asyncio.get_event_loop()
+event_loop: asyncio.ProactorEventLoop = asyncio.get_event_loop()
 
 # Tpose image srcs
 srcs: List[str] = request_tpose_srcs(max_page=3)
@@ -1698,7 +1729,10 @@ commands: Dict[str, Command] = {
                     f"\n{prefix}info"),
     "awake": Command(f"{prefix}awake",
                      "Continuously moves a given member from voice channel back and forth for a while",
-                     f"Awake member Fred\n{prefix}awake @Fred")
+                     f"Awake member Fred\n{prefix}awake @Fred"),
+    "loop": Command(f"{prefix}loop",
+                    "Activate/deactivate loop value on this server",
+                    f"Change loop value\n{prefix}loop")
 }
 
 commands_map: Dict[str, Callable] = {
@@ -1729,7 +1763,8 @@ commands_map: Dict[str, Callable] = {
     f"{prefix}wipe": wipe,
     f"{prefix}nword": nword,
     f"{prefix}info": info,
-    f"{prefix}awake": awake
+    f"{prefix}awake": awake,
+    f"{prefix}loop": loop
 }
 
 voice_restrictions: Set[str] = {"deaf", "mute"}
@@ -1750,6 +1785,7 @@ async def on_connect():
 
     Video.ids = {guild.id: 1 for guild in client.guilds}
     Video.queues = {guild.id: {} for guild in client.guilds}
+    Video.loops = {guild.id: False for guild in client.guilds}
     Video.last_video_plays = {guild.id: 0.0 for guild in client.guilds}
     Video.last_video_pauses = {guild.id: 0.0 for guild in client.guilds}
     Video.last_video_remaining_durations = {guild.id: 0.0 for guild in client.guilds}
@@ -1831,7 +1867,7 @@ async def on_message(message: Message):
             special_message: str = special_function()
             await message.channel.send(special_message)
 
-        if message.guild.id in [decente_guild_id, swat_guild_id, titas_id, tcho_id, habbo_hell_id]:
+        if message.guild.id in [decente_guild_id, swat_guild_id, titas_id, tcho_id, habbo_hell_id, elias_guild_id]:
 
             if message.content == "--apocalipse":
 
@@ -1932,7 +1968,7 @@ async def on_message(message: Message):
                         await member.move_to(None)
 
                 message.guild.voice_client.play(audio_source,
-                                                after=lambda e: loop.create_task(inner_disconnect(message)))
+                                                after=lambda e: event_loop.create_task(inner_disconnect(message)))
         # END MACAQUICE SECTION
 
 
@@ -1981,11 +2017,6 @@ async def on_guild_join(guild: Guild):
             restrict_event_class.add_guild(guild.id)
 
         Video.add_queue(guild.id)
-        Video.queues[guild.id] = {}
-        Video.ids[guild.id] = 1
-        Video.last_video_plays[guild.id] = 0.0
-        Video.last_video_pauses[guild.id] = 0.0
-        Video.last_video_remaining_durations[guild.id] = 0
 
 
 # Member leave guild
@@ -2000,20 +2031,11 @@ async def on_member_remove(member: Member):
             restrict_event_class.remove_guild(guild.id)
 
         Video.remove_queue(guild.id)
-        del Video.queues[guild.id]
-        del Video.ids[guild.id]
-        del Video.last_video_plays[guild.id]
-        del Video.last_video_pauses[guild.id]
-        del Video.last_video_remaining_durations[guild.id]
 
 
-# Bot disconnects
+# Bot disconnect
 @client.event
 async def on_disconnect():
     await client.connect()
 
 client.run(token)
-
-
-
-

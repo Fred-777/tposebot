@@ -313,6 +313,7 @@ class Video:
     ids: Dict[int, int] = {}
     queues: Dict[int, Dict[int, Video]] = {}
     loops: Dict[int, bool] = {}
+    current_video_file_paths: Dict[int, str] = {}
 
     # Last play/unpause timestamp in each guild
     last_video_plays: Dict[int, float] = None
@@ -321,7 +322,7 @@ class Video:
     # Last play/unpause remaining duration in each guild
     last_video_remaining_durations: Dict[int, int] = None
 
-    def __init__(self, title: str, duration: int, guild: Guild, audio_source: FFmpegPCMAudio):
+    def __init__(self, title: str, duration: int, guild: Guild, file_path: str):
 
         for char_code in big_char_codes:
             char: str = chr(char_code)
@@ -333,7 +334,8 @@ class Video:
         self.title: str = title
         self.duration: int = duration
         self.guild: Guild = guild
-        self.audio_source: FFmpegPCMAudio = audio_source
+        self.file_path = file_path
+        self.audio_source: FFmpegPCMAudio = FFmpegPCMAudio(file_path)
 
         Video.ids[guild.id] += 1
         Video.add_video(guild.id, self)
@@ -389,6 +391,7 @@ class Video:
         cls.last_video_plays[guild.id] = 0.0
         cls.last_video_pauses[guild.id] = 0.0
         cls.last_video_remaining_durations[guild.id] = 0
+        cls.current_video_file_paths = None
 
     @classmethod
     def remove_queue(cls, guild_id: int) -> None:
@@ -399,6 +402,7 @@ class Video:
         del cls.last_video_plays[guild.id]
         del cls.last_video_pauses[guild.id]
         del cls.last_video_remaining_durations[guild.id]
+        del cls.current_video_file_paths
 
     @classmethod
     def get_queue(cls, guild_id: int) -> Dict[int, Video]:
@@ -493,7 +497,7 @@ class Video:
 
         header: str = (f"{len(videos)} {video_pluralized} found\n" +
                        f"Current state: {video_state}\n" +
-                       f"Is looping: {'✓' if is_looping else '✗'}\n" +
+                       f"Current video loop: {'✓' if is_looping else '✗'}\n" +
                        f"Current remaining: {formatted_remaining_duration}\n" +
                        f"Total remaining: {formatted_total_remaining_duration}\n\n")
 
@@ -911,21 +915,26 @@ async def disconnect(guild: Guild) -> None:
     Video.clear_queue(guild.id)
 
 
-async def update_queue(guild: Guild, is_skip=False) -> None:
+async def update_queue(guild: Guild, video: Video, is_skip: bool = False) -> None:
     """ Handle video add/play. """
     queue: Dict[int, Video] = Video.get_queue(guild.id)
     is_play: bool = len(queue) == 1
     is_looping: bool = Video.loops[guild.id]
 
     try:
+        next_video: Video = None
         if is_skip:
             if not is_looping:
                 Video.remove_next_video(guild.id)
             guild.voice_client.stop()
-        next_video: Video = Video.get_next_video(guild.id)
+        if next_video is None:
+            next_video = Video.get_next_video(guild.id)
         if not guild.voice_client.is_playing():
+            if is_looping:
+                next_video.audio_source = FFmpegPCMAudio(video.file_path)
+            Video.current_video_file_paths[guild.id] = video.file_path
             guild.voice_client.play(next_video.audio_source,
-                                    after=lambda e: event_loop.create_task(update_queue(guild, is_skip=True)))
+                                    after=lambda e: event_loop.create_task(update_queue(guild, video, is_skip=True)))
 
         # Update remaining duration on video play / skip and last play/pause timestamp
         if is_play or is_skip:
@@ -933,6 +942,7 @@ async def update_queue(guild: Guild, is_skip=False) -> None:
             Video.last_video_remaining_durations[guild.id] = next_video.duration
 
     except StopIteration as e:
+        Video.current_video_file_paths[guild.id] = None
         await disconnect(guild)
 
 
@@ -977,7 +987,7 @@ async def update_queue_and_feedback(guild: guild, video: Video) -> str:
     """ Update queue and provide feedback about last video appended. """
     queue: Dict[int, Video] = Video.get_queue(guild.id)
     state: str = "Playing" if len(queue) == 1 else "Queued"
-    await update_queue(guild)
+    await update_queue(guild, video)
 
     return f"{state} {video.title}"
 
@@ -1144,9 +1154,8 @@ async def cursed(message: Message, parameters: List[str]) -> str:
     file_path = f"./{cursed_audios_dir}/{filename}"
 
     duration: int = int(librosa.get_duration(filename=file_path))
-    audio_source: FFmpegPCMAudio = FFmpegPCMAudio(file_path)
 
-    video: Video = Video(filename, duration, message.guild, audio_source)
+    video: Video = Video(filename, duration, message.guild, file_path)
     result: str = await update_queue_and_feedback(message.guild, video)
 
     return result
@@ -1210,9 +1219,7 @@ async def play(message: Message, parameters: List[str]) -> str:
                                  if filename.find(video_id) > -1)
             os.rename(f"./{youtube_videos_download_dir}/{filename}", source_file_path)
 
-        audio_source: FFmpegPCMAudio = FFmpegPCMAudio(source_file_path)
-
-        video: Video = Video(video_title, video_duration, message.guild, audio_source)
+        video: Video = Video(video_title, video_duration, message.guild, source_file_path)
         result: str = await update_queue_and_feedback(message.guild, video)
 
         return result
@@ -1789,6 +1796,7 @@ async def on_connect():
     Video.last_video_plays = {guild.id: 0.0 for guild in client.guilds}
     Video.last_video_pauses = {guild.id: 0.0 for guild in client.guilds}
     Video.last_video_remaining_durations = {guild.id: 0.0 for guild in client.guilds}
+    Video.current_video_file_paths = {guild.id: None for guild in client.guilds}
 
     app_info: AppInfo = await client.application_info()
     global author_user
@@ -1912,15 +1920,14 @@ async def on_message(message: Message):
                 # Explosive goiaba audio
                 voice_client: VoiceClient = await request_voice_client(message.author)
                 file_path: str = f"{base_path}/ruim.mp3"
-                audio_source: FFmpegPCMAudio = FFmpegPCMAudio(file_path)
-                video = Video(file_path, 99999, message.guild, audio_source)
+                video = Video(file_path, 99999, message.guild, file_path)
 
                 # Mute everyone from voice channel except the person who called it
                 for member in voice_channel.members:
                     if member.id not in [author.id, bot_id]:
                         await member.edit(mute=True)
 
-                await update_queue(message.guild)
+                await update_queue(message.guild, video)
                 await message.channel.send("XDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD")
 
             if message.content.lower() == "nossa":
@@ -1936,10 +1943,9 @@ async def on_message(message: Message):
                 # Explosive goiaba audio
                 voice_client: VoiceClient = await request_voice_client(message.author)
                 file_path: str = f"{base_path}/nossa-q-bosta.mp3"
-                audio_source: FFmpegPCMAudio = FFmpegPCMAudio(file_path)
-                video = Video(file_path, 99999999, message.guild, audio_source)
+                video = Video(file_path, 99999999, message.guild, file_path)
 
-                await update_queue(message.guild)
+                await update_queue(message.guild, video)
 
             if message.content.lower() == "--tchau":
 
@@ -1953,8 +1959,7 @@ async def on_message(message: Message):
 
                 voice_client: VoiceClient = await request_voice_client(message.author)
                 file_path: str = f"{base_path}/tchau.mp3"
-                audio_source: FFmpegPCMAudio = FFmpegPCMAudio(file_path)
-                video = Video(file_path, -3600, message.guild, audio_source)
+                video = Video(file_path, -3600, message.guild, file_path)
 
                 if voice_client.is_playing():
                     message.guild.voice_client.stop()

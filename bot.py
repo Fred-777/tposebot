@@ -41,6 +41,7 @@ extra_srcs_path: str = "./extra-srcs.txt"
 youtube_videos_source_dir: str = "youtube-videos"
 cursed_audios_dir: str = "cursed-audios"
 youtube_videos_download_dir: str = "youtube-videos-download"
+youtube_base_url: str = "https://www.youtube.com"
 
 n_words_path: str = "./n-words.txt"
 
@@ -99,12 +100,14 @@ client: Client = Client(activity=game)
 # Referenced before connection
 author_user: User = None
 connect_datetime: datetime.datetime = None
+awake_timeouts: Dict[int, Set[int]] = None
 
 
 # ---------- Classes ---------- #
 
 class Command:
     """ Describe a command available from bot. """
+
     def __init__(self, name: str, description: str, example: str):
         self.name = name
         self.description = description
@@ -605,7 +608,20 @@ def get_pediu() -> str:
     return result
 
 
-def request_image_srcs(query_param: str, max_page: int = 1) -> List[str]:
+async def _request_image_srcs(url: str):
+    """ Lower level function to request image srcs from a single page. """
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            content: str = str(await response.read())
+
+    soup: bs4.BeautifulSoup = bs4.BeautifulSoup(content, features="lxml")
+    imgs: bs4.element.Tag = soup.select("div > a > img")
+    srcs: List[str] = [img["src"] for img in imgs]
+
+    return srcs
+
+
+async def request_image_srcs(query_param: str, max_page: int = 1) -> List[str]:
     """ Return image srcs found until a given page from query service. """
     base_url: str = "http://results.dogpile.com"
 
@@ -614,23 +630,20 @@ def request_image_srcs(query_param: str, max_page: int = 1) -> List[str]:
         "User-Agent": "Chrome"
     }
 
-    urls: List[str] = [f"{base_url}/serp?qc=images&q={query_param}&page={page}&sc={sc_param}"
-                       for page in range(1, max_page + 1)]
+    urls: Generator[str] = (f"{base_url}/serp?qc=images&q={query_param}&page={page}&sc={sc_param}"
+                            for page in range(1, max_page + 1))
 
-    srcs: List[str] = []
-    for url in urls:
-        response: requests.Response = requests.get(url, headers=request_headers)
-        soup: bs4.BeautifulSoup = bs4.BeautifulSoup(response.content, features="lxml")
-        imgs: bs4.element.Tag = soup.select("div > a > img")
-        page_srcs: List[str] = [img["src"] for img in imgs]
-        srcs.extend(page_srcs)
+    tasks: List[asyncio.Task] = [event_loop.create_task(_request_image_srcs(url)) for url in urls]
+    await asyncio.wait([*tasks])
+    pages_srcs: List[List[str]] = [task.result() for task in tasks]
+    srcs: List[str] = [src for page_srcs in pages_srcs for src in page_srcs]
 
     return srcs
 
 
-def request_tpose_srcs(max_page: int = 1) -> List[str]:
+async def request_tpose_srcs(max_page: int = 1) -> List[str]:
     """ Request tpose image srcs. """
-    srcs: List[str] = request_image_srcs("tpose", max_page)
+    srcs: List[str] = await request_image_srcs("tpose", max_page)
     srcs.extend(extra_srcs)
 
     return srcs
@@ -942,8 +955,11 @@ async def update_queue(guild: Guild, video: Video, is_skip: bool = False) -> Non
             Video.last_video_remaining_durations[guild.id] = next_video.duration
 
     except StopIteration as e:
-        Video.current_video_file_paths[guild.id] = None
-        await disconnect(guild)
+        filenames: List[str] = os.listdir(f"./{youtube_videos_download_dir}")
+        is_downloading: bool = len(filenames) > 0
+        if not is_downloading:
+            Video.current_video_file_paths[guild.id] = None
+            await disconnect(guild)
 
 
 def shuffle_dict(d: Dict[int, Any]) -> Dict[int, Any]:
@@ -1006,6 +1022,75 @@ def get_seconds_difference(datetime1: datetime.datetime, datetime2: datetime.dat
     seconds_difference: int = abs(int(total_seconds))
 
     return seconds_difference
+
+
+async def play_youtube_video(url: str, message: Message) -> Video:
+    """ Process given youtube video url, add it to queue and return it. """
+    video_id: str = re.search("(?<=v=)[\w\-]{11}", url)[0]
+
+    with youtube_dl.YoutubeDL() as ydl:
+        video_info: Dict = await event_loop.run_in_executor(None,
+                                                            lambda: ydl.extract_info(url,
+                                                                                     download=False))
+
+    video_title: str = video_info["title"]
+    video_duration: int = int(video_info["duration"])
+
+    if video_duration > 7200:
+        return "This video is too large"
+
+    source_file_path: str = f"./{youtube_videos_source_dir}/{video_id}"
+    source_file_exists: bool = os.path.exists(source_file_path)
+
+    if not source_file_exists:
+        await message.channel.send(f"Downloading {video_title}...")
+
+        ydl_opts = {
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredquality": "192"
+                }
+            ],
+            "outtmpl": f"{youtube_videos_download_dir}/{video_id}"
+        }
+
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+            await event_loop.run_in_executor(None,
+                                             lambda: ydl.download([url]))
+
+        filenames: Generator[str] = (filename for filename in os.listdir(youtube_videos_download_dir))
+        filename: str = next(filename for filename in filenames
+                             if filename.find(video_id) > -1)
+        os.rename(f"./{youtube_videos_download_dir}/{filename}", source_file_path)
+
+    video: Video = Video(video_title, video_duration, message.guild, source_file_path)
+
+    return video
+
+
+async def request_playlist_video_ids(playlist_id: str) -> List[int]:
+    video_ids: List[int] = []
+    max_results: int = 50
+    page_token: str = ""
+
+    has_next_page: bool = True
+    while has_next_page:
+        query_params = (f"part=snippet&playlistId={playlist_id}&key={api_key}&maxResults={max_results}&" +
+                        f"pageToken={pageToken}")
+        url: str = f"https://www.googleapis.com/youtube/v3/playlistItems?{query_params}"
+        page_token = response_obj["nextPageToken"]
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                response_obj = await response.json()
+
+        for item in response_obj["items"]:
+            video_ids.append(item["snippet"]["resourceId"]["videoId"])
+
+        has_next_page = "nextPageToken" in response_obj
+
+    return video_ids
 
 
 # ---------- Interface ---------- #
@@ -1161,7 +1246,7 @@ async def cursed(message: Message, parameters: List[str]) -> str:
     return result
 
 
-async def play(message: Message, parameters: List[str]) -> str:
+async def play(message: Message, parameters: List[str]) -> None:
     """ Request bot to join voice channel and optionally play a song. """
     length: int = len(parameters)
 
@@ -1174,55 +1259,48 @@ async def play(message: Message, parameters: List[str]) -> str:
     has_query: bool = length > 1
     query: str = " ".join(parameters[1:]) if has_query else None
 
-    # Search for a video if query was given
+    # Search for something if query was given
     if query is not None:
 
-        youtube_video_regex: str = "youtube.com/watch\?.*v=[\w\-]{11}"
-        is_query_url: bool = re.search(youtube_video_regex, query) is not None
-        url: str = query if is_query_url else await request_video_url(query)
+        is_query: str = query.find(youtube_base_url) == -1
+        youtube_video_url: str = None
+        if is_query:
+            youtube_video_url = await request_video_url(query)
+        else:
+            youtube_video_url = query
 
-        video_id: str = re.search("(?<=v=)[\w\-]{11}", url)[0]
+        query_params_regex: str = "(?<=\?).+"
+        query_params_match: re.Match = re.search(query_params_regex, youtube_video_url)
+        query_params: str = query_params_match[0] if query_params_match is not None else None
+        print(query_params)
 
-        with youtube_dl.YoutubeDL() as ydl:
-            video_info: Dict = await event_loop.run_in_executor(None,
-                                                                lambda: ydl.extract_info(url,
-                                                                                   download=False))
+        # Build a key-value query param dict
+        query_params_split_regex: str = "[^=&]+?=[^&]+"
+        query_params_splitted: List[str] = re.findall(query_params_split_regex, query_params)
+        query_params_key_valued: List[List[str]] = [s.split("=") for s in query_params_splitted]
+        query_params_map: Dict[str, str] = {item[0]: item[1] for item in query_params_key_valued}
 
-        video_title: str = video_info["title"]
-        video_duration: int = int(video_info["duration"])
+        # Handle query param values
+        playlist_key: str = "list"
+        has_playlist: bool = playlist_key in query_params_map
+        video_key: str = "v"
+        has_video: bool = video_key in query_params_map
 
-        if video_duration > 7200:
-            return "This video is too large"
-
-        source_file_path: str = f"./{youtube_videos_source_dir}/{video_id}"
-        source_file_exists: bool = os.path.exists(source_file_path)
-
-        if not source_file_exists:
-            await message.channel.send(f"Downloading {video_title}...")
-
-            ydl_opts = {
-                "postprocessors": [
-                    {
-                        "key": "FFmpegExtractAudio",
-                        "preferredquality": "192"
-                    }
-                ],
-                "outtmpl": f"{youtube_videos_download_dir}/{video_id}"
-            }
-
-            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                await event_loop.run_in_executor(None,
-                                                 lambda: ydl.download([url]))
-
-            filenames: Generator[str] = (filename for filename in os.listdir(youtube_videos_download_dir))
-            filename: str = next(filename for filename in filenames
-                                 if filename.find(video_id) > -1)
-            os.rename(f"./{youtube_videos_download_dir}/{filename}", source_file_path)
-
-        video: Video = Video(video_title, video_duration, message.guild, source_file_path)
-        result: str = await update_queue_and_feedback(message.guild, video)
-
-        return result
+        if has_playlist:
+            # Play youtube playlist (basically list of youtube videos)
+            playlist_id: str = query_params_map[playlist_key]
+            video_ids: List[int] = await request_playlist_video_ids(playlist_id)
+            for video_id in video_ids:
+                youtube_video_url = f"{youtube_base_url}/watch?v={video_id}"
+                video: Video = await play_youtube_video(youtube_video_url, message)
+                result = await update_queue_and_feedback(message.guild, video)
+                await message.channel.send(result)
+        elif has_video:
+            # Play youtube video
+            video: Video = await play_youtube_video(youtube_video_url, message)
+            print(f"video: {video}")
+            result: str = await update_queue_and_feedback(message.guild, video)
+            await message.channel.send(result)
 
 
 async def leave(message: Message, parameters: List[str]) -> str:
@@ -1597,12 +1675,21 @@ async def awake(message: Message, parameters: List[str]) -> str:
     current_voice_channel: VoiceChannel = member.voice.channel
     other_voice_channel: VoiceChannel = voice_channels[0]
 
+    guild_awake_timeouts: Set[int] = awake_timeouts[message.guild.id]
+    is_timeouted: bool = author.id in guild_awake_timeouts
+    if is_timeouted:
+        return "Wait a moment before awaking again"
+
     move_reason: str = "Awaking purposes"
+    seconds_duration: int = 30
     for i in range(2):
         await member.move_to(other_voice_channel, reason=move_reason)
         await member.move_to(current_voice_channel, reason=move_reason)
 
-    return f"Wake up {member.mention}!!!"
+    await message.channel.send(f"Wake up {member.mention}!!!")
+    guild_awake_timeouts.add(author.id)
+    await asyncio.sleep(seconds_duration)
+    guild_awake_timeouts.remove(author.id)
 
 
 async def loop(message: Message, parameters: List[str]) -> str:
@@ -1643,7 +1730,7 @@ async def TODO(video_id: str):
 event_loop: asyncio.ProactorEventLoop = asyncio.get_event_loop()
 
 # Tpose image srcs
-srcs: List[str] = request_tpose_srcs(max_page=3)
+srcs: List[str] = event_loop.run_until_complete(request_tpose_srcs(max_page=3))
 
 # Char code for chars that become bigger in code blocks
 big_char_codes: Set[int] = {12300, 12301, 12302, 12303}
@@ -1804,15 +1891,14 @@ async def on_connect():
     author_user = app_info.owner
     connect_datetime = get_current_datetime()
 
+    global awake_timeouts
+    awake_timeouts = {guild.id: set() for guild in client.guilds}
+
 
 # Bot ready
 @client.event
 async def on_ready():
     print(f"{client.user} awoke")
-
-    ######### Test start #########
-
-    ######### Test end #########
 
 
 # Send message
@@ -1875,7 +1961,7 @@ async def on_message(message: Message):
             special_message: str = special_function()
             await message.channel.send(special_message)
 
-        if message.guild.id in [decente_guild_id, swat_guild_id, titas_id, tcho_id, habbo_hell_id, elias_guild_id]:
+        if message.guild.id in [decente_guild_id, swat_guild_id, titas_id, tcho_id, habbo_hell_id]:
 
             if message.content == "--apocalipse":
 
@@ -2023,6 +2109,9 @@ async def on_guild_join(guild: Guild):
 
         Video.add_queue(guild.id)
 
+        global awake_timeouts
+        awake_timeouts[guild.id] = set()
+
 
 # Member leave guild
 @client.event
@@ -2037,10 +2126,8 @@ async def on_member_remove(member: Member):
 
         Video.remove_queue(guild.id)
 
+        global awake_timeouts
+        del awake_timeouts[guild.id]
 
-# Bot disconnect
-@client.event
-async def on_disconnect():
-    await client.connect()
 
 client.run(token)

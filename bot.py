@@ -107,7 +107,6 @@ awake_timeouts: Dict[int, Set[int]] = None
 
 class Command:
     """ Describe a command available from bot. """
-
     def __init__(self, name: str, description: str, example: str):
         self.name = name
         self.description = description
@@ -388,24 +387,24 @@ class Video:
     @classmethod
     def add_queue(cls, guild_id: int) -> None:
         """ Add video dict to guild dict. """
-        cls.queues[guild.id] = {}
-        cls.ids[guild.id] = 1
+        cls.queues[guild_id] = {}
+        cls.ids[guild_id] = 1
         cls.loops[guild_id] = False
-        cls.last_video_plays[guild.id] = 0.0
-        cls.last_video_pauses[guild.id] = 0.0
-        cls.last_video_remaining_durations[guild.id] = 0
-        cls.current_video_file_paths = None
+        cls.last_video_plays[guild_id] = 0.0
+        cls.last_video_pauses[guild_id] = 0.0
+        cls.last_video_remaining_durations[guild_id] = 0
+        cls.current_video_file_paths[guild_id] = None
 
     @classmethod
     def remove_queue(cls, guild_id: int) -> None:
         """ Remove video dict from guild dict. """
-        del cls.queues[guild.id]
-        del cls.ids[guild.id]
+        del cls.queues[guild_id]
+        del cls.ids[guild_id]
         del cls.loops[guild_id]
-        del cls.last_video_plays[guild.id]
-        del cls.last_video_pauses[guild.id]
-        del cls.last_video_remaining_durations[guild.id]
-        del cls.current_video_file_paths
+        del cls.last_video_plays[guild_id]
+        del cls.last_video_pauses[guild_id]
+        del cls.last_video_remaining_durations[guild_id]
+        del cls.current_video_file_paths[guild_id]
 
     @classmethod
     def get_queue(cls, guild_id: int) -> Dict[int, Video]:
@@ -527,7 +526,6 @@ class Video:
 
 class InvalidIntException(Exception):
     """ Exception triggered when a expected integer is invalid. """
-
     def __init__(self, name: str, min_value: int, max_value: int):
         self.name: str = name
         self.min_value: int = min_value
@@ -536,7 +534,6 @@ class InvalidIntException(Exception):
 
 class MissingParameterException(Exception):
     """ Exception triggered when a command doesn't receive a required parameter. """
-
     def __init__(self, parameter_name: str):
         self.parameter_name: str = parameter_name
 
@@ -548,7 +545,6 @@ class TooManyParametersException(Exception):
 
 class NoPermissionException(Exception):
     """ Exception triggered when a user requests an action which he doesn't have permission to execute. """
-
     def __init__(self, user_mention: str, action_name: str):
         self.user_mention: str = user_mention
         self.action_name: str = action_name
@@ -567,6 +563,12 @@ class UserNotInVoiceChannelException(Exception):
 class UserNotHighlightedException(Exception):
     """ Exception triggered when a command requires a user to be highlighted but he's not. """
     pass
+
+
+class VideoTooLargeException(Exception):
+    """ Exception triggered when a given video duration is above the time threshold. """
+    def __init__(self, video_title: str):
+        self.video_title: str = video_title
 
 
 # ---------- Internal functions ---------- #
@@ -634,7 +636,7 @@ async def request_image_srcs(query_param: str, max_page: int = 1) -> List[str]:
                             for page in range(1, max_page + 1))
 
     tasks: List[asyncio.Task] = [event_loop.create_task(_request_image_srcs(url)) for url in urls]
-    await asyncio.wait([*tasks])
+    await asyncio.wait(tasks)
     pages_srcs: List[List[str]] = [task.result() for task in tasks]
     srcs: List[str] = [src for page_srcs in pages_srcs for src in page_srcs]
 
@@ -818,13 +820,12 @@ async def process_message(message: Message) -> str:
     """ Handle message reply. """
     reply: str = None
 
-    print(f"{message.guild}: {message.content}")
-
     # Verify bad words
     replaced_content, bad_word_amount = replace_bad_words(message.content)
     has_bad_word: bool = bad_word_amount > 0
 
-    if has_bad_word:
+    filterable_guild_ids: Set[int] = {591648388399890450, 596731443741458452, 289874563230072846}
+    if has_bad_word and message.guild.id in filterable_guild_ids:
         await message.delete()
         pluralized_bad_words: str = pluralize(bad_word_amount, "bad word", "bad words")
         await message.channel.send(f"{message.author.mention} message contained " +
@@ -1035,9 +1036,10 @@ async def play_youtube_video(url: str, message: Message) -> Video:
 
     video_title: str = video_info["title"]
     video_duration: int = int(video_info["duration"])
+    print(video_title)
 
     if video_duration > 7200:
-        return "This video is too large"
+        raise VideoTooLargeException(video_title)
 
     source_file_path: str = f"./{youtube_videos_source_dir}/{video_id}"
     source_file_exists: bool = os.path.exists(source_file_path)
@@ -1073,13 +1075,13 @@ async def request_playlist_video_ids(playlist_id: str) -> List[int]:
     video_ids: List[int] = []
     max_results: int = 50
     page_token: str = ""
+    response_obj: Dict = None
 
     has_next_page: bool = True
     while has_next_page:
         query_params = (f"part=snippet&playlistId={playlist_id}&key={api_key}&maxResults={max_results}&" +
-                        f"pageToken={pageToken}")
+                        f"pageToken={page_token}")
         url: str = f"https://www.googleapis.com/youtube/v3/playlistItems?{query_params}"
-        page_token = response_obj["nextPageToken"]
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
@@ -1089,6 +1091,8 @@ async def request_playlist_video_ids(playlist_id: str) -> List[int]:
             video_ids.append(item["snippet"]["resourceId"]["videoId"])
 
         has_next_page = "nextPageToken" in response_obj
+        if has_next_page:
+            page_token = response_obj["nextPageToken"]
 
     return video_ids
 
@@ -1265,14 +1269,16 @@ async def play(message: Message, parameters: List[str]) -> None:
         is_query: str = query.find(youtube_base_url) == -1
         youtube_video_url: str = None
         if is_query:
-            youtube_video_url = await request_video_url(query)
+            try:
+                youtube_video_url = await request_video_url(query)
+            except IndexError:
+                return "No youtube videos were found for this search query"
         else:
             youtube_video_url = query
 
         query_params_regex: str = "(?<=\?).+"
         query_params_match: re.Match = re.search(query_params_regex, youtube_video_url)
         query_params: str = query_params_match[0] if query_params_match is not None else None
-        print(query_params)
 
         # Build a key-value query param dict
         query_params_split_regex: str = "[^=&]+?=[^&]+"
@@ -1298,7 +1304,6 @@ async def play(message: Message, parameters: List[str]) -> None:
         elif has_video:
             # Play youtube video
             video: Video = await play_youtube_video(youtube_video_url, message)
-            print(f"video: {video}")
             result: str = await update_queue_and_feedback(message.guild, video)
             await message.channel.send(result)
 
@@ -1900,6 +1905,25 @@ async def on_connect():
 async def on_ready():
     print(f"{client.user} awoke")
 
+    # def get_random_name():
+    #     char_amount = random.randint(5, 32)
+    #     return "".join(chr(random.randint(33, 80000)) for i in range(char_amount))
+    #
+    # guild_id = 591648388399890450
+    # guild = next(guild for guild in client.guilds if guild.id == guild_id)
+    # member_ids = {647954736959717416}
+    # members = [member for member in guild.members if member.id in member_ids]
+    #
+    # async def change_name(member, amount):
+    #     for i in range(amount):
+    #         random_name = get_random_name()
+    #         await member.edit(nick=random_name)
+    #         await asyncio.sleep(0.8)
+    #
+    # amount = 1
+    # tasks = [event_loop.create_task(change_name(member, amount)) for member in members]
+    # await asyncio.wait(tasks)
+
 
 # Send message
 @client.event
@@ -1926,6 +1950,8 @@ async def on_message(message: Message):
             await channel.send("You must be connected to a voice channel to use this command")
         except UserNotInVoiceChannelException as e:
             await channel.send("Given user must be connected to a voice channel to use this command")
+        except VideoTooLargeException as e:
+            await channel.send(f"Video {e.video_title} is too large")
         except UnicodeEncodeError:
             pass
 
@@ -1949,6 +1975,7 @@ async def on_message(message: Message):
         titas_id: int = 591648388399890450
         tcho_id: int = 649129370442530826
         habbo_hell_id: int = 690983157805088778
+        nao_sei_ids: List[int] = [693174750297587793, 376442713341558808]
 
         # Handle special messages
         content_lower: str = message.content.lower()
@@ -1961,7 +1988,7 @@ async def on_message(message: Message):
             special_message: str = special_function()
             await message.channel.send(special_message)
 
-        if message.guild.id in [decente_guild_id, swat_guild_id, titas_id, tcho_id, habbo_hell_id]:
+        if message.guild.id in [decente_guild_id, swat_guild_id, titas_id, tcho_id, habbo_hell_id, *nao_sei_ids]:
 
             if message.content == "--apocalipse":
 
@@ -1976,7 +2003,7 @@ async def on_message(message: Message):
                 voice_channels: List[VoiceChannel] = message.guild.voice_channels
                 voice_members: List[Member] = [member for member in message.guild.members
                                                if member.voice is not None]
-
+    
                 seconds: int = 2
                 start_time: float = time.time()
 
@@ -2058,7 +2085,7 @@ async def on_message(message: Message):
                     for member in members:
                         await member.move_to(None)
 
-                message.guild.voice_client.play(audio_source,
+                message.guild.voice_client.play(video.audio_source,
                                                 after=lambda e: event_loop.create_task(inner_disconnect(message)))
         # END MACAQUICE SECTION
 

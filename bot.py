@@ -99,13 +99,14 @@ client: Client = Client(activity=game)
 # Referenced before connection
 author_user: User = None
 connect_datetime: datetime.datetime = None
-awake_timeouts: Dict[int, Set[int]] = None
+awake_timeouts: Dict[int, Set[int]] = {}
 
 
 # ---------- Classes ---------- #
 
 class Command:
     """ Describe a command available from bot. """
+
     def __init__(self, name: str, description: str, example: str):
         self.name = name
         self.description = description
@@ -124,9 +125,6 @@ class Command:
 
 class RestrictEvent(ABC):
     """ Base class for member restriction event management. """
-    ids: Dict[int, int] = {}
-    events: Dict[int, Dict[int, RestrictEvent]] = {}
-
     def __init__(self, member: Member, seconds: int):
         self.id = self.__class__.ids[member.guild.id]
         self.member: Member = member
@@ -180,6 +178,7 @@ class RestrictEvent(ABC):
     @classmethod
     def remove_guild(cls, guild_id: int) -> None:
         """ Remove guild as a instance container. """
+        print(f"{cls}.remove_guild incoming:")
         del cls.ids[guild_id]
         del cls.events[guild_id]
 
@@ -243,6 +242,7 @@ class RestrictEvent(ABC):
 
 class AmputateEvent(RestrictEvent):
     """ Amputate event on progress. """
+    ids: Dict[int, int] = {}
     events: Dict[int, Dict[int, AmputateEvent]] = {}
 
     name_present: str = "amputate"
@@ -267,6 +267,7 @@ class AmputateEvent(RestrictEvent):
 
 class DeafEvent(RestrictEvent):
     """ Deaf event on progress. """
+    ids: Dict[int, int] = {}
     events: Dict[int, Dict[int, DeafEvent]] = {}
 
     name_present: str = "deaf"
@@ -289,6 +290,7 @@ class DeafEvent(RestrictEvent):
 
 class MuteEvent(RestrictEvent):
     """ Mute event on progress. """
+    ids: Dict[int, int] = {}
     events: Dict[int, Dict[int, MuteEvent]] = {}
 
     name_present: str = "mute"
@@ -364,14 +366,17 @@ class Video:
     inactivity_events: Dict[int, bool] = {}
 
     # Text channel that triggered bot voice session in each guild
-    text_channels: Dict[int, TextChannel] = {}
+    caller_text_channels: Dict[int, TextChannel] = {}
+
+    # Voice channel that bot is currently in in each guild
+    connected_voice_channels: Dict[int, VoiceChannel] = {}
 
     # Last play/unpause timestamp in each guild
-    last_video_plays: Dict[int, float] = None
+    last_video_plays: Dict[int, float] = {}
     # Last pause timestamp in each guild
-    last_video_pauses: Dict[int, float] = None
+    last_video_pauses: Dict[int, float] = {}
     # Last play/unpause remaining duration in each guild
-    last_video_remaining_durations: Dict[int, int] = None
+    last_video_remaining_durations: Dict[int, int] = {}
 
     def __init__(self, title: str, duration: int, message: Message, file_path: str):
 
@@ -438,26 +443,30 @@ class Video:
     @classmethod
     def add_queue(cls, guild_id: int) -> None:
         """ Add video dict to guild dict. """
-        cls.queues[guild_id] = {}
         cls.ids[guild_id] = 1
+        cls.queues[guild_id] = {}
         cls.loops[guild_id] = False
+        cls.last_video_file_paths[guild_id] = None
         cls.inactivity_events[guild_id] = False
+        cls.caller_text_channels[guild_id] = None
+        cls.connected_voice_channels[guild_id] = None
         cls.last_video_plays[guild_id] = 0.0
         cls.last_video_pauses[guild_id] = 0.0
         cls.last_video_remaining_durations[guild_id] = 0
-        cls.last_video_file_paths[guild_id] = None
 
     @classmethod
     def remove_queue(cls, guild_id: int) -> None:
         """ Remove video dict from guild dict. """
-        del cls.queues[guild_id]
         del cls.ids[guild_id]
+        del cls.queues[guild_id]
         del cls.loops[guild_id]
+        del cls.last_video_file_paths[guild_id]
         del cls.inactivity_events[guild_id]
+        del cls.caller_text_channels[guild_id]
+        del cls.connected_voice_channels[guild_id]
         del cls.last_video_plays[guild_id]
         del cls.last_video_pauses[guild_id]
         del cls.last_video_remaining_durations[guild_id]
-        del cls.last_video_file_paths[guild_id]
 
     @classmethod
     def get_queue(cls, guild_id: int) -> Dict[int, Video]:
@@ -579,6 +588,7 @@ class Video:
 
 class InvalidIntException(Exception):
     """ Exception triggered when a expected integer is invalid. """
+
     def __init__(self, name: str, min_value: int, max_value: int):
         self.name: str = name
         self.min_value: int = min_value
@@ -587,6 +597,7 @@ class InvalidIntException(Exception):
 
 class MissingParameterException(Exception):
     """ Exception triggered when a command doesn't receive a required parameter. """
+
     def __init__(self, parameter_name: str):
         self.parameter_name: str = parameter_name
 
@@ -598,6 +609,7 @@ class TooManyParametersException(Exception):
 
 class NoPermissionException(Exception):
     """ Exception triggered when a user requests an action which he doesn't have permission to execute. """
+
     def __init__(self, user_mention: str, action_name: str):
         self.user_mention: str = user_mention
         self.action_name: str = action_name
@@ -620,6 +632,7 @@ class UserNotHighlightedException(Exception):
 
 class VideoTooLargeException(Exception):
     """ Exception triggered when a given video duration is above the time threshold. """
+
     def __init__(self, video_title: str):
         self.video_title: str = video_title
 
@@ -794,7 +807,6 @@ async def restrict(message: Message,
         if restrict_event_class.name_present in voice_restrictions:
             return "Target user is not in voice chat"
         else:
-            print(e)
             return (f"User {message.author.mention} doesn't have permission to " +
                     f"{restrict_event_class.name_present} user {member.mention}")
 
@@ -904,6 +916,7 @@ async def process_message(message: Message) -> str:
     # Run command
     elif command_exists:
         command_function: Callable = commands_map[command]
+        print(f"[{message.guild}] {message.author}: {message.content}")
         reply = await command_function(message, parameters)
 
     return reply
@@ -964,19 +977,24 @@ async def request_video_url(query: str) -> str:
     return video_url
 
 
-async def request_voice_client(author: Member) -> VoiceClient:
+async def request_voice_client(message: Message) -> VoiceClient:
     """ Request voice client for author voice channel and connect bot if it's not connected. """
-    is_bot_in_channel: bool = author.guild.voice_client is not None
+    author: Member = message.author
+    guild: Guild = message.guild
+    is_bot_in_channel: bool = guild.voice_client is not None
     if is_bot_in_channel:
-        voice_client: VoiceClient = author.guild.voice_client
+        voice_client: VoiceClient = guild.voice_client
     else:
         voice_client: VoiceClient = await author.voice.channel.connect()
+
+        # Add caller text channel
+        Video.caller_text_channels[guild.id] = message.channel
 
     return voice_client
 
 
 async def disconnect(guild: Guild) -> None:
-    """ Disconnect voice client from guild and clear queue. """
+    """ Disconnect voice client from guild. """
     await guild.voice_client.disconnect()
     Video.clear_queue(guild.id)
 
@@ -1026,9 +1044,13 @@ async def update_queue(guild: Guild, video: Video, is_skip: bool = False) -> Non
 
             is_inactive: bool = InactivityEvent.check_event(guild.id)
             if is_inactive and is_same_restriction:
-                await video.channel.send("I left for being inactive, call me back whenever you want")
+
+                # Read caller text channel and connected voice channel
+                text_channel: TextChannel = Video.caller_text_channels[guild.id]
+                voice_channel: VoiceChannel = Video.connected_voice_channels[guild.id]
                 Video.last_video_file_paths[guild.id] = None
                 await disconnect(guild)
+                await text_channel.send(f"I left {voice_channel.mention} for being inactive")
 
 
 def shuffle_dict(d: Dict[int, Any]) -> Dict[int, Any]:
@@ -1303,7 +1325,7 @@ async def cursed(message: Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise AuthorNotInVoiceChannelException()
 
-    voice_client: VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message)
 
     filenames: List[str] = os.listdir(f"./{cursed_audios_dir}")
     filename: str = random.choice(filenames)
@@ -1325,7 +1347,7 @@ async def play(message: Message, parameters: List[str]) -> None:
     if not is_user_in_channel:
         raise AuthorNotInVoiceChannelException()
 
-    voice_client: VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message)
 
     has_query: bool = length > 1
     query: str = " ".join(parameters[1:]) if has_query else None
@@ -1410,7 +1432,7 @@ async def pause(message: Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise AuthorNotInVoiceChannelException()
 
-    voice_client: VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message)
 
     if voice_client.is_playing():
         voice_client.pause()
@@ -1442,7 +1464,7 @@ async def unpause(message: Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise AuthorNotInVoiceChannelException()
 
-    voice_client: VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message)
 
     if voice_client.is_playing():
         return "I am already unpaused"
@@ -1466,7 +1488,7 @@ async def stop(message: Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise AuthorNotInVoiceChannelException()
 
-    voice_client: VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message)
 
     voice_client.stop()
     Video.clear_queue(message.guild.id)
@@ -1485,7 +1507,7 @@ async def skip(message: Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise AuthorNotInVoiceChannelException()
 
-    voice_client: VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message)
 
     if voice_client.is_playing():
         message.guild.voice_client.stop()
@@ -1506,7 +1528,7 @@ async def remove(message: Message, parameters: List[str]) -> str:
     if not is_user_in_channel:
         raise AuthorNotInVoiceChannelException()
 
-    voice_client: VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message)
 
     # Check if id is number
     video_id_str = parameters[1]
@@ -1540,7 +1562,7 @@ async def shuffle(message: Message, parameters: List[str]) -> str:
     if length > required_length:
         raise TooManyParametersException()
 
-    voice_client: VoiceClient = await request_voice_client(message.author)
+    voice_client: VoiceClient = await request_voice_client(message)
 
     queue: Dict[int, Video] = Video.get_queue(message.guild.id)
 
@@ -1781,23 +1803,6 @@ async def loop(message: Message, parameters: List[str]) -> str:
 
 # ---------- Application variables ---------- #
 
-async def TODO(video_id: str):
-    """ T. """
-    url: str = "https://ytcutter.com/ytcutter.php?a=form1"
-    data: Dict[str, str] = {
-        "videoId": video_id,
-        "startTime": "62.7",
-        "endTime": "68.8",
-        "quality": "hd720",
-        "format": "audio"
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, data=data) as response:
-            response_obj: Dict = await response.json()
-            return response_obj
-
-
 # Async scheduler
 event_loop: asyncio.ProactorEventLoop = asyncio.get_event_loop()
 
@@ -1942,33 +1947,22 @@ voice_restrictions: Set[str] = {"deaf", "mute"}
 @client.event
 async def on_connect():
     # Initialize data that requires connection
-    RestrictEvent.ids = {guild.id: 1 for guild in client.guilds}
-    RestrictEvent.events = {guild.id: {} for guild in client.guilds}
+    for guild in client.guilds:
 
-    for restrict_event_class in RestrictEvent.__subclasses__():
-        restrict_event_class.ids = copy.deepcopy(RestrictEvent.ids)
-        restrict_event_class.events = copy.deepcopy(RestrictEvent.events)
+        for restrict_event_class in RestrictEvent.__subclasses__():
+            restrict_event_class.add_guild(guild.id)
 
-    Video.ids = {guild.id: 1 for guild in client.guilds}
-    Video.queues = {guild.id: {} for guild in client.guilds}
-    Video.loops = {guild.id: False for guild in client.guilds}
-    Video.inactivity_events = {guild.id: False for guild in client.guilds}
-    Video.last_video_plays = {guild.id: 0.0 for guild in client.guilds}
-    Video.last_video_pauses = {guild.id: 0.0 for guild in client.guilds}
-    Video.last_video_remaining_durations = {guild.id: 0.0 for guild in client.guilds}
-    Video.last_video_file_paths = {guild.id: None for guild in client.guilds}
+        Video.add_queue(guild.id)
+        InactivityEvent.add_guild(guild.id)
 
-    InactivityEvent.ids = {guild.id: 1 for guild in client.guilds}
-    InactivityEvent.events = {guild.id: None for guild in client.guilds}
+        global awake_timeouts
+        awake_timeouts[guild.id] = set()
 
     app_info: AppInfo = await client.application_info()
     global author_user
     global connect_datetime
     author_user = app_info.owner
     connect_datetime = get_current_datetime()
-
-    global awake_timeouts
-    awake_timeouts = {guild.id: set() for guild in client.guilds}
 
 
 # Bot ready
@@ -2004,7 +1998,6 @@ async def on_message(message: Message):
 
     if not sent_by_bot and has_content:
         try:
-            print(f"[{message.guild}] {message.author}: {message.content}")
             channel: TextChannel = message.channel
 
             reply: str = await process_message(message)
@@ -2076,7 +2069,7 @@ async def on_message(message: Message):
                 voice_channels: List[VoiceChannel] = message.guild.voice_channels
                 voice_members: List[Member] = [member for member in message.guild.members
                                                if member.voice is not None]
-    
+
                 seconds: int = 2
                 start_time: float = time.time()
 
@@ -2104,7 +2097,7 @@ async def on_message(message: Message):
                 voice_channel: VoiceChannel = message.author.voice.channel
 
                 # Explosive goiaba audio
-                voice_client: VoiceClient = await request_voice_client(message.author)
+                voice_client: VoiceClient = await request_voice_client(message)
                 file_path: str = f"{base_path}/ruim.mp3"
                 video = Video(file_path, 99999, message, file_path)
 
@@ -2127,7 +2120,7 @@ async def on_message(message: Message):
                         return
 
                 # Explosive goiaba audio
-                voice_client: VoiceClient = await request_voice_client(message.author)
+                voice_client: VoiceClient = await request_voice_client(message)
                 file_path: str = f"{base_path}/nossa-q-bosta.mp3"
                 video = Video(file_path, 99999999, message, file_path)
 
@@ -2143,7 +2136,7 @@ async def on_message(message: Message):
                         await message.channel.send(f"Role 'os fodas' is required to use this command")
                         return
 
-                voice_client: VoiceClient = await request_voice_client(message.author)
+                voice_client: VoiceClient = await request_voice_client(message)
                 file_path: str = f"{base_path}/tchau.mp3"
                 video = Video(file_path, -3600, message, file_path)
 
@@ -2169,7 +2162,7 @@ async def on_voice_state_update(member: Member, before: VoiceState, after: Voice
     guild: Guild = member.guild
     was_unmuted: bool = before.mute and not after.mute
     was_undeafen: bool = before.deaf and not after.deaf
-    has_joined: bool = before.channel is None and after.channel is not None
+    has_joined: bool = before.channel is not after.channel and after.channel is not None
     has_left: bool = before.channel is not None and before.channel is not after.channel
     is_member_bot: bool = member.id == bot_id
 
@@ -2184,13 +2177,14 @@ async def on_voice_state_update(member: Member, before: VoiceState, after: Voice
             DeafEvent.remove_event(guild.id, member.id)
 
     # Deal with member voice channel join
-    elif has_joined:
+    if has_joined:
         if is_member_bot:
-            pass
+
+            # Add connected voice channel
+            Video.connected_voice_channels[guild.id] = guild.voice_client.channel
 
     # Deal with member voice channel leave
-    elif has_left:
-
+    if has_left:
         if is_member_bot:
             Video.clear_queue(guild.id)
         else:
@@ -2198,9 +2192,12 @@ async def on_voice_state_update(member: Member, before: VoiceState, after: Voice
             if is_bot_in_channel:
                 is_bot_alone: bool = len(before.channel.members) == 1
                 if is_bot_alone:
+
+                    # Read caller text channel and connected voice channel
+                    text_channel: TextChannel = Video.caller_text_channels[guild.id]
+                    voice_channel: VoiceChannel = Video.connected_voice_channels[guild.id]
                     await disconnect(guild)
-                    text_channel: TextChannel = guild.text_channels[0]
-                    await text_channel.send("I left the voice channel because I was left alone")
+                    await text_channel.send(f"I left {voice_channel.mention} because I was left alone")
 
 
 # User updated status, activity, nickname or roles
@@ -2243,7 +2240,9 @@ async def on_member_remove(member: Member):
 
     # Remove guild dict
     if was_bot_removed:
+
         guild: Guild = member.guild
+
         for restrict_event_class in RestrictEvent.__subclasses__():
             restrict_event_class.remove_guild(guild.id)
 
@@ -2255,4 +2254,9 @@ async def on_member_remove(member: Member):
         del awake_timeouts[guild.id]
 
 
-client.run(token)
+def main():
+    client.run(token)
+
+
+if __name__ == "__main__":
+    main()

@@ -10,7 +10,6 @@ from discord import *
 import aiohttp
 import asyncio
 import bs4
-import copy
 import datetime
 import dotenv
 import json
@@ -44,21 +43,6 @@ youtube_base_url: str = "https://www.youtube.com"
 
 n_words_path: str = "./n-words.txt"
 
-with open(n_words_path) as file:
-    n_words: List[str] = file.readlines()
-
-dirnames: List[str] = [
-    youtube_videos_source_dir,
-    cursed_audios_dir,
-    youtube_videos_download_dir
-]
-
-for dirname in dirnames:
-    file_exists: bool = os.path.exists(f"./{dirname}")
-    if not file_exists:
-        os.mkdir(dirname)
-
-
 # ---------- Text formatting ---------- #
 
 
@@ -73,6 +57,27 @@ def format_code_block(text: str) -> str:
 
 
 # ---------- Load environment ---------- #
+
+with open(n_words_path) as file:
+    n_words: List[str] = file.readlines()
+
+dirnames: List[str] = [
+    youtube_videos_source_dir,
+    cursed_audios_dir,
+    youtube_videos_download_dir
+]
+
+for dirname in dirnames:
+    file_exists: bool = os.path.exists(f"./{dirname}")
+    if not file_exists:
+        os.mkdir(dirname)
+
+# Remove incomplete downloads
+for filename in os.listdir(f"./{youtube_videos_download_dir}"):
+    os.remove(f"./{youtube_videos_download_dir}/{filename}")
+
+# Prevent cache from ruining play command
+os.system("youtube-dl --rm-cache-dir")
 
 with open(bad_words_path) as file:
     data: str = file.read()
@@ -588,7 +593,6 @@ class Video:
 
 class InvalidIntException(Exception):
     """ Exception triggered when a expected integer is invalid. """
-
     def __init__(self, name: str, min_value: int, max_value: int):
         self.name: str = name
         self.min_value: int = min_value
@@ -597,7 +601,6 @@ class InvalidIntException(Exception):
 
 class MissingParameterException(Exception):
     """ Exception triggered when a command doesn't receive a required parameter. """
-
     def __init__(self, parameter_name: str):
         self.parameter_name: str = parameter_name
 
@@ -609,7 +612,6 @@ class TooManyParametersException(Exception):
 
 class NoPermissionException(Exception):
     """ Exception triggered when a user requests an action which he doesn't have permission to execute. """
-
     def __init__(self, user_mention: str, action_name: str):
         self.user_mention: str = user_mention
         self.action_name: str = action_name
@@ -632,7 +634,6 @@ class UserNotHighlightedException(Exception):
 
 class VideoTooLargeException(Exception):
     """ Exception triggered when a given video duration is above the time threshold. """
-
     def __init__(self, video_title: str):
         self.video_title: str = video_title
 
@@ -889,7 +890,7 @@ async def process_message(message: Message) -> str:
     replaced_content, bad_word_amount = replace_bad_words(message.content)
     has_bad_word: bool = bad_word_amount > 0
 
-    filterable_guild_ids: Set[int] = {591648388399890450, 596731443741458452, 289874563230072846}
+    filterable_guild_ids: Set[int] = {591648388399890450, 596731443741458452}
     if has_bad_word and message.guild.id in filterable_guild_ids:
         await message.delete()
         pluralized_bad_words: str = pluralize(bad_word_amount, "bad word", "bad words")
@@ -1161,6 +1162,7 @@ async def play_youtube_video(url: str, message: Message) -> Video:
 
 
 async def request_playlist_video_ids(playlist_id: str) -> List[int]:
+    """ Request video ids for a given playlist. """
     video_ids: List[int] = []
     max_results: int = 50
     page_token: str = ""
@@ -1940,6 +1942,18 @@ commands_map: Dict[str, Callable] = {
 
 voice_restrictions: Set[str] = {"deaf", "mute"}
 
+# Specific messages to be replied
+special_messages: Dict[str, Callable] = {
+    "quem": get_pediu,
+    "ninguem": lambda: "pediu",
+    "ok": lambda: "boomer",
+    "comedores de": lambda: "coc\u00f4",
+    "oi": lambda: "oi",
+    "que": lambda: "ijo",
+    "q": lambda: "ijo",
+    "caguei": lambda: "comi",
+}
+
 
 # ---------- Event listeners ---------- #
 
@@ -1963,6 +1977,8 @@ async def on_connect():
     global connect_datetime
     author_user = app_info.owner
     connect_datetime = get_current_datetime()
+
+    print(f"TPoseBot is currently in {len(client.guilds)} servers")
 
 
 # Bot ready
@@ -2011,6 +2027,8 @@ async def on_message(message: Message):
             await channel.send("Too many parameters")
         except NoPermissionException as e:
             await channel.send(f"User {e.user_mention} doesn't have permission to {e.action_name}")
+        except UserNotHighlightedException as e:
+            await channel.send(f"Given user must be highlighted")
         except AuthorNotInVoiceChannelException as e:
             await channel.send("You must be connected to a voice channel to use this command")
         except UserNotInVoiceChannelException as e:
@@ -2021,18 +2039,6 @@ async def on_message(message: Message):
             pass
 
         # START MACAQUICE SECTION (full cringe)
-
-        # Specific messages to be replied
-        special_messages: Dict[str, Callable] = {
-            "quem": get_pediu,
-            "ninguem": lambda: "pediu",
-            "ok": lambda: "boomer",
-            "comedores de": lambda: "coc\u00f4",
-            "oi": lambda: "oi",
-            "que": lambda: "ijo",
-            "q": lambda: "ijo",
-            "caguei": lambda: "comi",
-        }
 
         # If guild is allowed
         swat_guild_id: int = 517905518279524362
@@ -2054,7 +2060,7 @@ async def on_message(message: Message):
             special_message: str = special_function()
             await message.channel.send(special_message)
 
-        if message.guild.id in [decente_guild_id, swat_guild_id, titas_id, tcho_id, habbo_hell_id, *nao_sei_ids]:
+        if message.guild.id in [swat_guild_id, titas_id, tcho_id, habbo_hell_id, *nao_sei_ids]:
 
             if message.content == "--apocalipse":
 
@@ -2187,6 +2193,7 @@ async def on_voice_state_update(member: Member, before: VoiceState, after: Voice
     if has_left:
         if is_member_bot:
             Video.clear_queue(guild.id)
+            Video.connected_voice_channels[guild.id] = None
         else:
             is_bot_in_channel: bool = bot_id in [member.id for member in before.channel.members]
             if is_bot_in_channel:

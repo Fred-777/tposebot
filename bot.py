@@ -599,14 +599,20 @@ class InvalidIntException(Exception):
         self.max_value: int = max_value
 
 
+class InvalidArgumentException(Exception):
+    """ Exception triggered when a command receives invalid argument for a parameter. """
+    def __init__(self, message: str):
+        self.message: str = message
+
+
 class MissingParameterException(Exception):
     """ Exception triggered when a command doesn't receive a required parameter. """
     def __init__(self, parameter_name: str):
         self.parameter_name: str = parameter_name
 
 
-class TooManyParametersException(Exception):
-    """ Exception triggered when a command receives more parameters than expected. """
+class TooManyArgumentsException(Exception):
+    """ Exception triggered when a command receives more arguments than expected. """
     pass
 
 
@@ -751,10 +757,10 @@ def check_permissions(author: Member, function_role: Callable) -> bool:
 
 
 async def restrict(message: Message,
-                   parameters: List[str],
+                   arguments: List[str],
                    restrict_event_class: ClassVar[RestrictEvent]) -> str:
     """ Restrict someone for given number of seconds. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 3
 
     # Validate length
@@ -763,11 +769,11 @@ async def restrict(message: Message,
     if length == 2:
         raise MissingParameterException("seconds")
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
-    member_name: str = parameters[1]
+    member_name: str = arguments[1]
     member_id: int = extract_id(member_name)
-    seconds_str: str = parameters[2]
+    seconds_str: str = arguments[2]
 
     # Validate member highlight
     is_highlight: bool = member_id != -1
@@ -825,19 +831,19 @@ async def restrict(message: Message,
 
 
 async def unrestrict(message: Message,
-                     parameters: List[str],
+                     arguments: List[str],
                      restrict_event_class: ClassVar[RestrictEvent]) -> str:
     """ Unrestrict a restricted member. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 2
 
     # Validate length
     if length == 1:
         raise MissingParameterException("member")
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
-    member_name: str = parameters[1]
+    member_name: str = arguments[1]
     member_id: int = extract_id(member_name)
 
     # Validate member highlight
@@ -869,15 +875,15 @@ async def unrestrict(message: Message,
 
 
 async def restrictionlist(message: Message,
-                          parameters: List[str],
+                          arguments: List[str],
                           restrict_event_class: ClassVar[RestrictEvent]) -> str:
     """ Get list of currently restricted members on requested guild. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     # Validate length
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     return restrict_event_class.get_formatted_list(message.guild.id)
 
@@ -903,8 +909,8 @@ async def process_message(message: Message) -> str:
     bot_was_highlighted: bool = re.search(f"^<@!?{bot_id}>$", message.content) is not None
 
     # Handle input
-    parameters: List[str] = re.findall("\S+", message.content)
-    command: str = parameters[0]
+    arguments: List[str] = re.findall("\S+", message.content)
+    command: str = arguments[0]
     is_help: bool = re.search(f"^{prefix}help", message.content) is not None
     command_exists: bool = command in commands_map
 
@@ -913,12 +919,12 @@ async def process_message(message: Message) -> str:
         reply = suggest_help()
     # Reply to help
     elif is_help:
-        reply = get_help(parameters)
+        reply = get_help(arguments)
     # Run command
     elif command_exists:
         command_function: Callable = commands_map[command]
         print(f"[{message.guild}] {message.author}: {message.content}")
-        reply = await command_function(message, parameters)
+        reply = await command_function(message, arguments)
 
     return reply
 
@@ -1100,7 +1106,7 @@ async def update_queue_and_feedback(guild: guild, video: Video) -> str:
     return f"{state} {video.title}"
 
 
-def get_python_version():
+def get_python_version() -> str:
     """ Get current python version. """
     version = re.search("\S+", sys.version)[0]
 
@@ -1191,16 +1197,16 @@ async def request_playlist_video_ids(playlist_id: str) -> List[int]:
 # ---------- Interface ---------- #
 
 
-def get_help(parameters: List[str]) -> str:
+def get_help(arguments: List[str]) -> str:
     """ Describe all commands briefly or a given command extensively. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_lengths: Set[int] = {1, 2}
     max_required_length: int = max(required_lengths)
     is_general_help: bool = length == 1
     is_command_help: bool = length == 2
 
     if length > max_required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     # General help
     if is_general_help:
@@ -1214,77 +1220,77 @@ def get_help(parameters: List[str]) -> str:
     # Specific command help
     if is_command_help:
         try:
-            command: str = parameters[1]
+            command: str = arguments[1]
             return commands[command].get_extended_data()
         except KeyError:
             return "Invalid command was given"
 
 
-async def code(message: Message, parameters: List[str]) -> None:
+async def code(message: Message, arguments: List[str]) -> None:
     """ Provide file with current source code. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     code_file: File = File("./stable-bot.py")
     await message.channel.send(file=code_file)
 
 
-async def amputate(message: Message, parameters: List[str]) -> str:
+async def amputate(message: Message, arguments: List[str]) -> str:
     """ Amputate someone for given number of seconds. """
-    return await restrict(message, parameters, AmputateEvent)
+    return await restrict(message, arguments, AmputateEvent)
 
 
-async def unamputate(message: Message, parameters: List[str]) -> str:
+async def unamputate(message: Message, arguments: List[str]) -> str:
     """ Unamputate a amputated member. """
-    return await unrestrict(message, parameters, AmputateEvent)
+    return await unrestrict(message, arguments, AmputateEvent)
 
 
-async def amputatelist(message: Message, parameters: List[str]) -> str:
+async def amputatelist(message: Message, arguments: List[str]) -> str:
     """ Get list of currently amputated members on requested guild. """
-    return await restrictionlist(message, parameters, AmputateEvent)
+    return await restrictionlist(message, arguments, AmputateEvent)
 
 
-async def deaf(message: Message, parameters: List[str]) -> str:
+async def deaf(message: Message, arguments: List[str]) -> str:
     """ Deafen someone for given number of seconds. """
-    return await restrict(message, parameters, DeafEvent)
+    return await restrict(message, arguments, DeafEvent)
 
 
-async def undeaf(message: Message, parameters: List[str]) -> str:
+async def undeaf(message: Message, arguments: List[str]) -> str:
     """ Undeaf a deafened member. """
-    return await unrestrict(message, parameters, DeafEvent)
+    return await unrestrict(message, arguments, DeafEvent)
 
 
-async def deaflist(message: Message, parameters: List[str]) -> str:
+async def deaflist(message: Message, arguments: List[str]) -> str:
     """ Get list of currently deafened members on requested guild. """
-    return await restrictionlist(message, parameters, DeafEvent)
+    return await restrictionlist(message, arguments, DeafEvent)
 
 
-async def mute(message: Message, parameters: List[str]) -> str:
+async def mute(message: Message, arguments: List[str]) -> str:
     """ Mute someone for given number of seconds. """
-    return await restrict(message, parameters, MuteEvent)
+    return await restrict(message, arguments, MuteEvent)
 
 
-async def unmute(message: Message, parameters: List[str]) -> str:
+async def unmute(message: Message, arguments: List[str]) -> str:
     """ Unmute a muted member. """
-    return await unrestrict(message, parameters, MuteEvent)
+    return await unrestrict(message, arguments, MuteEvent)
 
 
-async def mutelist(message: Message, parameters: List[str]) -> str:
+async def mutelist(message: Message, arguments: List[str]) -> str:
     """ Get list of currently muted members on requested guild. """
-    return await restrictionlist(message, parameters, MuteEvent)
+    return await restrictionlist(message, arguments, MuteEvent)
 
 
-async def serverlist(message: Message, parameters: List[str]) -> str:
+async def serverlist(message: Message, arguments: List[str]) -> str:
     """ Request list of servers in which TPoseBot is present. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     # Validate length
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     guilds: List[Guild] = sorted([guild for guild in client.guilds if guild is not None],
                                  key=lambda guild: guild.name.lower())
@@ -1301,27 +1307,27 @@ async def serverlist(message: Message, parameters: List[str]) -> str:
     return format_code_block(header + formatted_guilds)
 
 
-async def tpose(message: Message, parameters: List[str]) -> str:
+async def tpose(message: Message, arguments: List[str]) -> str:
     """ Request random tpose image. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     # Validate length
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     src: str = random.choice(srcs)
 
     return src
 
 
-async def cursed(message: Message, parameters: List[str]) -> str:
+async def cursed(message: Message, arguments: List[str]) -> str:
     """ Request bot to join voice channel and play a random cursed audio. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1341,9 +1347,9 @@ async def cursed(message: Message, parameters: List[str]) -> str:
     return result
 
 
-async def play(message: Message, parameters: List[str]) -> None:
+async def play(message: Message, arguments: List[str]) -> None:
     """ Request bot to join voice channel and optionally play a song. """
-    length: int = len(parameters)
+    length: int = len(arguments)
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1352,7 +1358,7 @@ async def play(message: Message, parameters: List[str]) -> None:
     voice_client: VoiceClient = await request_voice_client(message)
 
     has_query: bool = length > 1
-    query: str = " ".join(parameters[1:]) if has_query else None
+    query: str = " ".join(arguments[1:]) if has_query else None
 
     # Search for something if query was given
     if query is not None:
@@ -1399,14 +1405,14 @@ async def play(message: Message, parameters: List[str]) -> None:
             await message.channel.send(result)
 
 
-async def leave(message: Message, parameters: List[str]) -> str:
+async def leave(message: Message, arguments: List[str]) -> str:
     """ Request bot to leave voice channel. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     # Validate length
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1421,14 +1427,14 @@ async def leave(message: Message, parameters: List[str]) -> str:
         return "I am not connected to a voice channel"
 
 
-async def pause(message: Message, parameters: List[str]) -> str:
+async def pause(message: Message, arguments: List[str]) -> str:
     """ Request bot to pause current video. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     # Validate length
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1453,14 +1459,14 @@ async def pause(message: Message, parameters: List[str]) -> str:
         return "I am not playing already"
 
 
-async def unpause(message: Message, parameters: List[str]) -> str:
+async def unpause(message: Message, arguments: List[str]) -> str:
     """ Request bot to unpause current video. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     # Validate length
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1477,14 +1483,14 @@ async def unpause(message: Message, parameters: List[str]) -> str:
         Video.last_video_plays[message.guild.id] = time.time()
 
 
-async def stop(message: Message, parameters: List[str]) -> str:
+async def stop(message: Message, arguments: List[str]) -> str:
     """ Request bot to stop playing and reset queue. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     # Validate length
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1496,14 +1502,14 @@ async def stop(message: Message, parameters: List[str]) -> str:
     Video.clear_queue(message.guild.id)
 
 
-async def skip(message: Message, parameters: List[str]) -> str:
+async def skip(message: Message, arguments: List[str]) -> str:
     """ Request bot to skip current video. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     # Validate length
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1517,14 +1523,14 @@ async def skip(message: Message, parameters: List[str]) -> str:
         return "There are no videos to skip"
 
 
-async def remove(message: Message, parameters: List[str]) -> str:
+async def remove(message: Message, arguments: List[str]) -> str:
     """ Request bot to remove video with given id. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 2
 
     # Validate length
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     is_user_in_channel: bool = message.author.voice is not None
     if not is_user_in_channel:
@@ -1533,7 +1539,7 @@ async def remove(message: Message, parameters: List[str]) -> str:
     voice_client: VoiceClient = await request_voice_client(message)
 
     # Check if id is number
-    video_id_str = parameters[1]
+    video_id_str = arguments[1]
     try:
         video_id: int = int(video_id_str)
     except ValueError:
@@ -1555,14 +1561,14 @@ async def remove(message: Message, parameters: List[str]) -> str:
     return f"{to_be_removed_video.title} was removed from queue"
 
 
-async def shuffle(message: Message, parameters: List[str]) -> str:
+async def shuffle(message: Message, arguments: List[str]) -> str:
     """ Shuffle videos in queue. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     # Validate length
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     voice_client: VoiceClient = await request_voice_client(message)
 
@@ -1583,56 +1589,107 @@ async def shuffle(message: Message, parameters: List[str]) -> str:
     return "Queue just got shuffled"
 
 
-async def queue(message: Message, parameters: List[str]) -> str:
+async def queue(message: Message, arguments: List[str]) -> str:
     """ Get current video queue. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     # Validate length
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     formatted_queue: str = Video.get_formatted_queue(message.guild)
 
     return formatted_queue
 
 
-async def dice(message: Message, parameters: List[str]) -> str:
-    """ Select a random number between 1 and given max number. """
-    length: int = len(parameters)
-    required_length: int = 2
+async def roll(message: Message, arguments: List[str]) -> str:
+    """ Run a roll procedure which supports fixed and random values. """
+    length: int = len(arguments)
 
     # Validate length
     if length == 1:
         raise MissingParameterException("max number")
 
-    if length > required_length:
-        raise TooManyParametersException()
+    # Handle roll data
+    """
+    "--roll 20" => "20"
+    "--roll d20" => "random.randint(1, 20)"
+    "--roll d20 + 2" => "random.randint(1, 20) + 2"
+    "--roll d20 + 2 - 3 + 5" => "random.randint(1, 20) + 2 - 3 + 5"
+    "--roll d20 + 1d10 - 3d5" => "random.randint(1, 20) + random.randint(10) - sum(random.randint(1, 5) for i in range(3))"
+    "--roll 3d5" => "sum(random.randint(1, 20) for i in range(3))"
+    """
+    # Store processed arguments
+    arguments_result: List[str] = []
+    operators: Set[str] = {"+", "-", "*"}
 
-    # Validate number
-    max_num_str: str = parameters[1]
-    min_value: int = 2
-    max_value: int = 1000000
-    is_max_num_valid: int = validate_int(max_num_str, min_value, max_value)
+    min_value_prefix: int = 1
+    max_value_prefix: int = 10
+    min_value_range: int = 1
+    max_value_range: int = 1000000
+    is_operator_expected: bool = False
+    last_operator: str = "+"
 
-    if not is_max_num_valid:
-        raise InvalidIntException("max number", min_value, max_value)
+    for argument in arguments[1:]:
 
-    min_num: int = 1
-    max_num: int = int(max_num_str)
-    random_num: int = random.randint(1, max_num)
+        # Operator
+        if argument in operators:
+            if not is_operator_expected:
+                raise InvalidArgumentException(f"Expected a number, received an operator instead: {argument}")
 
-    # Highlight if max num was achieved
-    result: str = str(random_num)
-    if random_num in {min_num, max_num}:
-        return format_bold_text(result)
+            is_operator_expected = False
+            last_operator = argument
+            arguments_result.append(argument)
 
-    return result
+        # Received unexpected number
+        elif is_operator_expected:
+            raise InvalidArgumentException(f"Expected an operator, received a number instead: {argument}")
+
+        # Received *?d*
+        elif re.search("^\d*d\d+$", argument) is not None:
+            if argument.startswith("d"):
+                argument = "1" + argument
+
+            is_operator_expected = True
+
+            prefix: int = int(re.search("^\d+", argument)[0])
+            max_range: int = int(re.search("\d+$", argument)[0])
+
+            is_prefix_valid: int = validate_int(str(prefix), min_value_prefix, max_value_prefix)
+            is_range_valid: int = validate_int(str(max_range), min_value_range, max_value_range)
+
+            if not is_prefix_valid:
+                raise InvalidIntException("prefix", min_value_prefix, max_value_prefix)
+            if not is_range_valid:
+                raise InvalidIntException("max range", min_value_range, max_value_range)
+
+            for i in range(prefix):
+                random_num: int = random.randint(1, max_range)
+                if i > 0:
+                    arguments_result.append(last_operator)
+                arguments_result.append(str(random_num))
+
+        # Received *
+        elif re.search("^\d+$", argument) is not None:
+            is_operator_expected = True
+            arguments_result.append(argument)
+
+        # Received unexpected value
+        else:
+            raise InvalidArgumentException(f"Invalid argument found: {argument}")
+
+    # Prepare output
+    result_code: str = " ".join(arguments_result)
+    result: int = eval(result_code)
+    output: str = f"{result_code} = {result}"
+
+    return output
 
 
-async def wipe(message: Message, parameters: List[str]) -> str:
+async def wipe(message: Message, arguments: List[str]) -> str:
     """ Remove all messages sent within last given number of seconds. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 2
 
     # Validate length
@@ -1640,7 +1697,7 @@ async def wipe(message: Message, parameters: List[str]) -> str:
         raise MissingParameterException("seconds")
 
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     # Validate author permissions
     author: Member = message.author
@@ -1652,7 +1709,7 @@ async def wipe(message: Message, parameters: List[str]) -> str:
         raise NoPermissionException(author.mention, action_name)
 
     # Validate number
-    total_seconds_str: str = parameters[1]
+    total_seconds_str: str = arguments[1]
     min_value: int = 1
     max_value: int = 7200
     is_max_num_valid: int = validate_int(total_seconds_str, min_value, max_value)
@@ -1683,26 +1740,26 @@ async def wipe(message: Message, parameters: List[str]) -> str:
     return result
 
 
-async def nword(message: Message, parameters: List[str]) -> str:
+async def nword(message: Message, arguments: List[str]) -> str:
     """ Get a random word that starts with n. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     n_word: str = random.choice(n_words)
 
     return n_word
 
 
-async def info(message: Message, parameters: List[str]) -> str:
+async def info(message: Message, arguments: List[str]) -> str:
     """ Get some general info about this bot. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     language_name: str = "Python"
     language_version: str = get_python_version()
@@ -1725,15 +1782,15 @@ async def info(message: Message, parameters: List[str]) -> str:
     return format_code_block(formatted_output)
 
 
-async def awake(message: Message, parameters: List[str]) -> str:
+async def awake(message: Message, arguments: List[str]) -> str:
     """ Continuously moves a given member from voice channel back and forth for a while. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 2
 
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
-    member_name: str = parameters[1]
+    member_name: str = arguments[1]
     member_id: int = extract_id(member_name)
 
     # Require member highlight
@@ -1788,13 +1845,13 @@ async def awake(message: Message, parameters: List[str]) -> str:
     guild_awake_timeouts.remove(author.id)
 
 
-async def loop(message: Message, parameters: List[str]) -> str:
+async def loop(message: Message, arguments: List[str]) -> str:
     """ Toggle loop value for current guild. """
-    length: int = len(parameters)
+    length: int = len(arguments)
     required_length: int = 1
 
     if length > required_length:
-        raise TooManyParametersException()
+        raise TooManyArgumentsException()
 
     current_loop_value: bool = Video.loops[message.guild.id]
     next_loop_value: bool = not current_loop_value
@@ -1888,9 +1945,10 @@ commands: Dict[str, Command] = {
     "queue": Command(f"{prefix}queue",
                      "Get current video queue",
                      f"\n{prefix}queue"),
-    "dice": Command(f"{prefix}dice",
-                    "Roll a dice that returns a random value from 1 until given number",
-                    f"Roll a random number from 1 to 10\n{prefix}roll 10"),
+    "roll": Command(f"{prefix}roll",
+                    ("Roll a dice which supports fixed values (ex: 1, 2) and random values (ex: 1d10, 2d6)." +
+                     "Random value must be prepended with a d."),
+                    f"Roll 2 random numbers from 1 to 10 and add 5 to it\n{prefix}roll 2d10 + 5"),
     "wipe": Command(f"{prefix}wipe",
                     "Remove all messages sent within last given number of seconds",
                     f"Remove all messages sent within last 30 seconds\n{prefix}wipe 30"),
@@ -1932,7 +1990,7 @@ commands_map: Dict[str, Callable] = {
     f"{prefix}remove": remove,
     f"{prefix}shuffle": shuffle,
     f"{prefix}queue": queue,
-    f"{prefix}dice": dice,
+    f"{prefix}roll": roll,
     f"{prefix}wipe": wipe,
     f"{prefix}nword": nword,
     f"{prefix}info": info,
@@ -2021,10 +2079,12 @@ async def on_message(message: Message):
                 await channel.send(reply)
         except InvalidIntException as e:
             await channel.send(f"Invalid {e.name}, it has to be an integer between {e.min_value} and {e.max_value}")
+        except InvalidArgumentException as e:
+            await channel.send(e.message)
         except MissingParameterException as e:
             await channel.send(f"No {e.parameter_name} parameter was given")
-        except TooManyParametersException as e:
-            await channel.send("Too many parameters")
+        except TooManyArgumentsException as e:
+            await channel.send("Too many arguments were given")
         except NoPermissionException as e:
             await channel.send(f"User {e.user_mention} doesn't have permission to {e.action_name}")
         except UserNotHighlightedException as e:
@@ -2060,7 +2120,7 @@ async def on_message(message: Message):
             special_message: str = special_function()
             await message.channel.send(special_message)
 
-        if message.guild.id in [swat_guild_id, titas_id, tcho_id, habbo_hell_id, *nao_sei_ids]:
+        if message.guild.id in [swat_guild_id, titas_id, elias_guild_id, tcho_id, habbo_hell_id, *nao_sei_ids]: 
 
             if message.content == "--apocalipse":
 

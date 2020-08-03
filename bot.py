@@ -121,7 +121,6 @@ awake_timeouts: Dict[int, Set[int]] = {}
 
 class Command:
     """ Describe a command available from bot. """
-
     def __init__(self, name: str, description: str, example: str):
         self.name = name
         self.description = description
@@ -142,7 +141,6 @@ class Command:
 
 class RestrictEvent(ABC):
     """ Base class for member restriction event management. """
-
     def __init__(self, member: Member, seconds: int):
         self.id = self.__class__.ids[member.guild.id]
         self.member: Member = member
@@ -919,7 +917,7 @@ async def process_message(message: Message) -> str:
     replaced_content, bad_word_amount = replace_bad_words(message.content)
     has_bad_word: bool = bad_word_amount > 0
 
-    filterable_guild_ids: Set[int] = {}
+    filterable_guild_ids: Set[int] = {591648388399890450}
     if has_bad_word and message.guild.id in filterable_guild_ids:
         await message.delete()
         pluralized_bad_words: str = pluralize(bad_word_amount, "bad word", "bad words")
@@ -1102,7 +1100,8 @@ def count_big_chars(s: str) -> int:
 
 def get_current_datetime() -> datetime.datetime:
     """ Request current UTC time and get datetime object from it. """
-    return datetime.datetime.fromtimestamp(time.time()) + datetime.timedelta(hours=3, minutes=1, seconds=50)
+    return datetime.datetime.fromtimestamp(time.time()) + datetime.timedelta(hours=3, minutes=0, seconds=20)
+    # return datetime.datetime.now()
 
 
 def get_formatted_duration(seconds: int, justify=False) -> str:
@@ -1164,7 +1163,7 @@ async def add_youtube_video(url: str, message: Message) -> Video:
     if video_duration > max_seconds_amount:
         raise VideoTooLargeException(video_title)
 
-    source_file_path: str = f"./{youtube_videos_source_dir}/{video_id}"
+    source_file_path: str = f"./{youtube_videos_source_dir}/{video_id}.mp3"
     source_file_exists: bool = os.path.exists(source_file_path)
 
     if not source_file_exists:
@@ -1687,6 +1686,13 @@ async def roll(message: Message, arguments: List[str]) -> str:
 
                 is_operator_expected = False
                 last_operator = argument
+
+                # Multiplication behaves differently, it multiplies by everything until now rather than last number
+                is_multiplication: bool = argument == "*"
+                if is_multiplication:
+                    arguments_result[0] = "(" + arguments_result[0]
+                    arguments_result[-1] += ")"
+
                 arguments_result.append(argument)
 
             # Received unexpected number
@@ -1717,7 +1723,7 @@ async def roll(message: Message, arguments: List[str]) -> str:
                         arguments_result.append(last_operator)
                     arguments_result.append(str(random_num))
 
-            # Received *
+            # Received single number
             elif re.search("^\d+$", argument) is not None:
                 is_operator_expected = True
                 arguments_result.append(argument)
@@ -2137,21 +2143,22 @@ async def on_message(message: Message):
         titas_id: int = 591648388399890450
         tcho_id: int = 649129370442530826
         habbo_hell_id: int = 690983157805088778
+        griu_guild_id: int = 678343441750556672
         nao_sei_ids: List[int] = [693174750297587793, 376442713341558808]
 
-        # Handle special messages
-        content_lower: str = message.content.lower()
-        key: str = next((key for key in special_messages
-                         if re.search(f"^{key}(\s|$)", content_lower) is not None), None)
-        is_special: bool = key is not None
-
-        if is_special:
-            special_function: Callable = special_messages[key]
-            special_message: str = special_function()
-            await message.channel.send(special_message)
-
-        if message.guild.id in [decente_guild_id, swat_guild_id, titas_id, elias_guild_id, tcho_id, habbo_hell_id,
+        if message.guild.id in [swat_guild_id, titas_id, elias_guild_id, tcho_id, habbo_hell_id, griu_guild_id, decente_guild_id,
                                 *nao_sei_ids]:
+
+            # Handle special messages
+            content_lower: str = message.content.lower()
+            key: str = next((key for key in special_messages
+                             if re.search(f"^{key}(\s|$)", content_lower) is not None), None)
+            is_special: bool = key is not None
+
+            if is_special:
+                special_function: Callable = special_messages[key]
+                special_message: str = special_function()
+                await message.channel.send(special_message)
 
             if message.content == "--apocalipse":
 
@@ -2251,14 +2258,21 @@ async def on_message(message: Message):
                 message.guild.voice_client.play(video.audio_source,
                                                 after=lambda e: event_loop.create_task(inner_disconnect(message)))
 
-            if message.content.lower() == "--spam":
+            if message.content.startswith("--spam"):
                 channel: DMChannel = await message.author.create_dm()
                 await channel.send("Caguei bora spamma aqui po XDD")
                 for i in range(1, 101):
                     await channel.send(f"oi{i}")
                     await asyncio.sleep(1)
 
-    # END MACAQUICE SECTION
+            if message.content.startswith("--nf"):
+                await message.delete()
+                filename: str = random.choice(os.listdir("nf"))
+                file: File = File(f"{base_path}/nf/{filename}")
+                content: str = message.content[5:]
+                await message.channel.send(content, file=file)
+
+# END MACAQUICE SECTION
 
 
 # Join, leave, mute, deafen on VC

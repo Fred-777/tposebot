@@ -196,7 +196,6 @@ class RestrictEvent(ABC):
 	@classmethod
 	def remove_guild(cls, guild_id: int) -> None:
 		""" Remove guild as a instance container. """
-		print(f"{cls}.remove_guild incoming:")
 		del cls.ids[guild_id]
 		del cls.events[guild_id]
 
@@ -1971,6 +1970,19 @@ async def search(message: Message, arguments: List[str]) -> str:
 	return result
 
 
+async def invite(message: Message, arguments: List[str]) -> str:
+	""" Return invite url. """
+	length: int = len(arguments)
+	required_length: int = 1
+
+	# Validate length
+	if length > required_length:
+		raise TooManyArgumentsException()
+
+	invite_url: str = "https://discord.com/oauth2/authorize?client_id=647954736959717416&permissions=1408363632&scope=bot"
+	return invite_url
+
+
 # ---------- Application variables ---------- #
 
 # Async scheduler
@@ -2077,7 +2089,10 @@ commands: Dict[str, Command] = {
 					f"Change loop value\n{prefix}loop"),
 	"search": Command(f"{prefix}search",
 					  "Search meaning for a given word",
-					  f"Search for the meaning of the word hat\n{prefix}search hat")
+					  f"Search for the meaning of the word hat\n{prefix}search hat"),
+	"invite": Command(f"{prefix}invite",
+					  "Get my invite url",
+					  f"{prefix}invite")
 }
 
 commands_map: Dict[str, Callable] = {
@@ -2110,7 +2125,8 @@ commands_map: Dict[str, Callable] = {
 	f"{prefix}info": info,
 	f"{prefix}awake": awake,
 	f"{prefix}loop": loop,
-	f"{prefix}search": search
+	f"{prefix}search": search,
+	f"{prefix}invite": invite
 }
 
 voice_restrictions: Set[str] = {"deaf", "mute"}
@@ -2119,6 +2135,7 @@ voice_restrictions: Set[str] = {"deaf", "mute"}
 special_messages: Dict[str, Callable] = {
 	"quem": get_pediu,
 	"ninguem": lambda: "pediu",
+	"sua": lambda: "opiniao",
 	"ok": lambda: "boomer",
 	"comedores de": lambda: "coc\u00f4",
 	"oi": lambda: "oi",
@@ -2205,10 +2222,14 @@ async def on_message(message: Message):
 		tcho_id: int = 649129370442530826
 		habbo_hell_id: int = 690983157805088778
 		griu_guild_id: int = 678343441750556672
+		vixx_guild_id: int = 381298169385975809
+		edu_coisa_id: int = 651515052280512533
 		nao_sei_ids: List[int] = [693174750297587793, 376442713341558808]
 
 		if message.guild.id in [swat_guild_id, titas_id, elias_guild_id, tcho_id, habbo_hell_id, griu_guild_id,
 								decente_guild_id,
+								vixx_guild_id,
+								edu_coisa_id,
 								*nao_sei_ids]:
 
 			# Handle special messages

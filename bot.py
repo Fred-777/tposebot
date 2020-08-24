@@ -34,7 +34,6 @@ prefix: str = os.getenv("prefix")
 token: str = os.getenv("token")
 sc_param: str = os.getenv("sc_param")
 
-bad_words_path: str = "./bad-words.txt"
 extra_srcs_path: str = "./extra-srcs.txt"
 
 youtube_videos_source_dir: str = "youtube-videos"
@@ -88,10 +87,6 @@ for filename in os.listdir(f"./{youtube_videos_download_dir}"):
 
 # Prevent cache from ruining play command
 os.system("youtube-dl --rm-cache-dir")
-
-with open(bad_words_path) as file:
-	data: str = file.read()
-	bad_word_regexes: List[str] = json.loads(data)
 
 with open(extra_srcs_path) as file:
 	data: str = file.read()
@@ -692,19 +687,6 @@ def validate_int(num_str: str, min_value: int, max_value: int) -> bool:
 	return is_num_valid
 
 
-def get_pediu() -> str:
-	""" Get string "pediu" with randomized changes. """
-	s: str = "pediu"
-
-	text: str = "".join([random.choice([char.lower(), char.upper()]) for char in s])
-	spaces: str = " " * random.randint(1, 3)
-	laughs: str = "".join("k" if random.random() < 0.7 else "j" for _ in range(random.randint(0, 4)))
-	exclamations: str = "?" * random.randint(0, 3)
-	result: str = text + spaces + laughs + exclamations
-
-	return result
-
-
 async def _request_image_srcs(url: str):
 	""" Lower level function to request image srcs from a single page. """
 	async with aiohttp.ClientSession() as session:
@@ -744,24 +726,6 @@ async def request_tpose_srcs(max_page: int = 1) -> List[str]:
 	srcs.extend(extra_srcs)
 
 	return srcs
-
-
-def replace_bad_words(s: str) -> Tuple[str, int]:
-	""" Replace bad words in a message. Return filtered message and amount of filtered words. """
-	# Prevent letter substitution through letters
-	s = s.replace("0", "o").replace("1", "i").replace("3", "e").replace("4", "a")
-	words: List[str] = re.findall("\S+", s) or []
-
-	bad_words: Set[str] = {word for word in words
-						   if any(re.search(f"\\b{bad_word_regex}\\b", word.lower()) is not None
-								  for bad_word_regex in bad_word_regexes)}
-
-	for bad_word in bad_words:
-		s = s.replace(bad_word, "".join([char if char.lower() not in "aeiou" else "#" for char in bad_word]))
-
-	bad_word_amount: int = sum([word == bad_word for word in words for bad_word in bad_words])
-
-	return s, bad_word_amount
 
 
 def check_permissions(author: Member, function_role: Callable) -> bool:
@@ -913,19 +877,6 @@ async def restrictionlist(message: Message,
 async def process_message(message: Message) -> str:
 	""" Handle message reply. """
 	reply: str = None
-
-	# Verify bad words
-	replaced_content, bad_word_amount = replace_bad_words(message.content)
-	has_bad_word: bool = bad_word_amount > 0
-
-	filterable_guild_ids: Set[int] = {591648388399890450}
-	if has_bad_word and message.guild.id in filterable_guild_ids:
-		await message.delete()
-		pluralized_bad_words: str = pluralize(bad_word_amount, "bad word", "bad words")
-		await message.channel.send(f"{message.author.mention} message contained " +
-								   f"{bad_word_amount} {pluralized_bad_words}\n")
-
-		return replaced_content
 
 	# Verify if message is just bot highlight
 	bot_was_highlighted: bool = re.search(f"^<@!?{bot_id}>$", message.content) is not None
@@ -2133,15 +2084,10 @@ voice_restrictions: Set[str] = {"deaf", "mute"}
 
 # Specific messages to be replied
 special_messages: Dict[str, Callable] = {
-	"quem": get_pediu,
-	"ninguem": lambda: "pediu",
-	"sua": lambda: "opiniao",
 	"ok": lambda: "boomer",
-	"comedores de": lambda: "coc\u00f4",
 	"oi": lambda: "oi",
 	"que": lambda: "ijo",
 	"q": lambda: "ijo",
-	"caguei": lambda: "comi",
 	"perdi": lambda: "perdi"
 }
 
@@ -2212,9 +2158,9 @@ async def on_message(message: Message):
 		except UnicodeEncodeError:
 			pass
 
-		# START MACAQUICE SECTION (full cringe)
+		# START CRINGE SECTION (non-official low effort features 4fun for specific guilds. There are no rules)
 
-		# If guild is allowed
+		# Allowed guild ids
 		swat_guild_id: int = 517905518279524362
 		decente_guild_id: int = 289874563230072846
 		elias_guild_id: int = 596731443741458452
@@ -2245,14 +2191,6 @@ async def on_message(message: Message):
 
 			if message.content == "--apocalipse":
 
-				if message.guild.id == decente_guild_id:
-
-					os_fodas_role_id = 549369366584754207
-					has_permission: bool = any([role.id == os_fodas_role_id for role in message.author.roles])
-					if not has_permission:
-						await message.channel.send(f"Role 'os fodas' is required to use this command")
-						return
-
 				voice_channels: List[VoiceChannel] = message.guild.voice_channels
 				voice_members: List[Member] = [member for member in message.guild.members
 											   if member.voice is not None]
@@ -2272,14 +2210,6 @@ async def on_message(message: Message):
 
 			if message.content == "--goiaba":
 
-				if message.guild.id == decente_guild_id:
-
-					os_fodas_role_id: int = 549369366584754207
-					has_permission: bool = any([role.id == os_fodas_role_id for role in message.author.roles])
-					if not has_permission:
-						await message.channel.send(f"Role 'os fodas' is required to use this command")
-						return
-
 				author: Member = message.author
 				voice_channel: VoiceChannel = message.author.voice.channel
 
@@ -2297,15 +2227,6 @@ async def on_message(message: Message):
 				await message.channel.send("XDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD")
 
 			if message.content.lower() == "nossa":
-
-				if message.guild.id == decente_guild_id:
-
-					os_fodas_role_id = 549369366584754207
-					has_permission: bool = any([role.id == os_fodas_role_id for role in message.author.roles])
-					if not has_permission:
-						await message.channel.send(f"Role 'os fodas' is required to use this command")
-						return
-
 				# Explosive goiaba audio
 				voice_client: VoiceClient = await request_voice_client(message)
 				file_path: str = f"{base_path}/nossa-q-bosta.mp3"
@@ -2314,14 +2235,6 @@ async def on_message(message: Message):
 				await update_queue(message.guild, video)
 
 			if message.content.lower() == "--tchau":
-
-				if message.guild.id == decente_guild_id:
-
-					os_fodas_role_id = 549369366584754207
-					has_permission: bool = any([role.id == os_fodas_role_id for role in message.author.roles])
-					if not has_permission:
-						await message.channel.send(f"Role 'os fodas' is required to use this command")
-						return
 
 				voice_client: VoiceClient = await request_voice_client(message)
 				file_path: str = f"{base_path}/tchau.mp3"
@@ -2343,7 +2256,7 @@ async def on_message(message: Message):
 
 			if message.content.startswith("--spam"):
 				channel: DMChannel = await message.author.create_dm()
-				await channel.send("Caguei bora spamma aqui po XDD")
+				await channel.send("Get spammed: 1 to 100")
 				for i in range(1, 101):
 					await channel.send(f"oi{i}")
 					await asyncio.sleep(1)
@@ -2355,8 +2268,7 @@ async def on_message(message: Message):
 				content: str = message.content[5:]
 				await message.channel.send(content, file=file)
 
-
-# END MACAQUICE SECTION
+	# END CRINGE SECTION
 
 
 # Join, leave, mute, deafen on VC

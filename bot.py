@@ -104,7 +104,8 @@ def suggest_help() -> str:
 author_id: int = 239388097714978817
 bot_id: int = 647954736959717416
 game: Game = Game(suggest_help())
-client: Client = Client(activity=game)
+intents: Intents = Intents.all()
+client: Client = Client(activity=game, intents=intents)
 
 # Referenced before connection
 author_user: User = None
@@ -137,6 +138,8 @@ class Command:
 
 class RestrictEvent(ABC):
 	""" Base class for member restriction event management. """
+	ids: Dict[int, int] = None
+	events: Dict[int, Dict[int, AmputateEvent]] = None
 
 	def __init__(self, member: Member, seconds: int):
 		self.id = self.__class__.ids[member.guild.id]
@@ -390,7 +393,6 @@ class Video:
 	last_video_remaining_durations: Dict[int, int] = {}
 
 	def __init__(self, title: str, duration: int, message: Message, file_path: str):
-
 		for char_code in big_char_codes:
 			char: str = chr(char_code)
 			title = title.replace(char, " ")
@@ -435,7 +437,7 @@ class Video:
 	def get_formatted_remaining_duration(cls, guild: Guild) -> str:
 		""" Get formatted representation of remaining duration for current video. """
 		remaining_duration: int = Video.get_remaining_duration(guild)
-		return get_formatted_duration(remaining_duration, justify=False)
+		return get_formatted_duration(remaining_duration)
 
 	@classmethod
 	def get_total_formatted_remaining_duration(cls, guild: Guild) -> str:
@@ -449,7 +451,7 @@ class Video:
 
 		total_remaining_duration: int = current_remaining_duration + total_next_videos_duration
 
-		return get_formatted_duration(total_remaining_duration, justify=False)
+		return get_formatted_duration(total_remaining_duration)
 
 	@classmethod
 	def add_queue(cls, guild_id: int) -> None:
@@ -886,9 +888,13 @@ async def process_message(message: Message) -> str:
 	command: str = arguments[0]
 	is_help: bool = re.search(f"^{prefix}help", message.content) is not None
 	command_exists: bool = command in commands_map
+	is_private: bool = message.guild is None
 
+	# Deal with private message
+	if is_private:
+		pass
 	# Reply highlight
-	if bot_was_highlighted:
+	elif bot_was_highlighted:
 		reply = suggest_help()
 	# Reply to help
 	elif is_help:
@@ -987,17 +993,19 @@ async def update_queue(guild: Guild, video: Video, is_skip: bool = False) -> Non
 	InactivityEvent.remove_event_if_exists(guild.id)
 
 	try:
-		next_video: Video = None
 		if is_skip:
 			if not is_looping:
 				Video.remove_next_video(guild.id)
 			guild.voice_client.stop()
-		if next_video is None:
-			next_video = Video.get_next_video(guild.id)
+		next_video: Video = Video.get_next_video(guild.id)
+
+		# Update last video loop cache
+		Video.last_video_file_paths[guild.id] = next_video.file_path
+
 		if not guild.voice_client.is_playing():
 			if is_looping:
-				next_video.audio_source = FFmpegPCMAudio(video.file_path)
-			Video.last_video_file_paths[guild.id] = video.file_path
+				video_file_path: str = Video.last_video_file_paths[guild.id]
+				next_video.audio_source = FFmpegPCMAudio(video_file_path)
 			is_paused: bool = guild.voice_client.is_paused()
 			if not is_paused:
 				guild.voice_client.play(next_video.audio_source,
@@ -1052,7 +1060,7 @@ def count_big_chars(s: str) -> int:
 
 def get_current_datetime() -> datetime.datetime:
 	""" Request current UTC time and get datetime object from it. """
-	return datetime.datetime.fromtimestamp(time.time()) + datetime.timedelta(hours=3, minutes=0, seconds=20)
+	return datetime.datetime.fromtimestamp(time.time()) + datetime.timedelta(hours=3, minutes=0, seconds=0)
 
 
 # return datetime.datetime.now()
@@ -1373,15 +1381,22 @@ async def play(message: Message, arguments: List[str]) -> None:
 			playlist_id: str = query_params_map[playlist_key]
 			video_ids: List[int] = await request_playlist_video_ids(playlist_id)
 			for video_id in video_ids:
-				youtube_video_url = f"{youtube_base_url}/watch?v={video_id}"
-				video: Video = await add_youtube_video(youtube_video_url, message)
-				result = await update_queue_and_feedback(message.guild, video)
-				await message.channel.send(result)
+				try:
+					youtube_video_url = f"{youtube_base_url}/watch?v={video_id}"
+					video: Video = await add_youtube_video(youtube_video_url, message)
+					result: str = await update_queue_and_feedback(message.guild, video)
+					await message.channel.send(result, delete_after=30)
+				except youtube_dl.utils.DownloadError:
+					await message.channel.send(f"Couldn't download video {video_id}")
 		elif has_video:
-			# Play youtube video
-			video: Video = await add_youtube_video(youtube_video_url, message)
-			result: str = await update_queue_and_feedback(message.guild, video)
-			await message.channel.send(result)
+			try:
+				# Play youtube video
+				video: Video = await add_youtube_video(youtube_video_url, message)
+				result: str = await update_queue_and_feedback(message.guild, video)
+				await message.channel.send(result)
+			except youtube_dl.utils.DownloadError:
+				video_id = query_params_map[video_key]
+				await message.channel.send(f"Couldn't download video {video_id}")
 
 
 async def leave(message: Message, arguments: List[str]) -> str:
@@ -1901,7 +1916,7 @@ async def search(message: Message, arguments: List[str]) -> str:
 
 	soup: bs4.BeautifulSoup = bs4.BeautifulSoup(html, features="lxml")
 
-	div_query: str = ".css-1urpfgu"
+	div_query: str = ".css-1fj93w9"
 	assert soup.select(div_query) != [], "Div changed class name (disgraça)"
 	div: bs4.element.Tag = soup.select(div_query)[0]
 	sections: List[bs4.element.Tag] = list(div.select("section"))[1:]
@@ -2083,12 +2098,16 @@ commands_map: Dict[str, Callable] = {
 voice_restrictions: Set[str] = {"deaf", "mute"}
 
 # Specific messages to be replied
-special_messages: Dict[str, Callable] = {
-	"ok": lambda: "boomer",
-	"oi": lambda: "oi",
-	"que": lambda: "ijo",
-	"q": lambda: "ijo",
-	"perdi": lambda: "perdi"
+special_messages: Dict[str, str] = {
+	"ok": "boomer",
+	"oi": "oi",
+	"que": "ijo",
+	"q": "ijo",
+	"perdi": "perdi",
+	"zabloing": "floppa",
+	"googas": "floppa",
+	"caracal": "floppa",
+	"floppa": "floppa",
 }
 
 
@@ -2120,6 +2139,45 @@ async def on_connect():
 @client.event
 async def on_ready():
 	print(f"TPoseBot is currently in {len(client.guilds)} servers")
+
+	max_guild_number_length: int = len(str(len(client.guilds)))
+	max_guild_name_length: int = max(len(guild.name) for guild in client.guilds)
+	for i, guild in enumerate(sorted(client.guilds, key=lambda guild: guild.name)):
+		formatted_guild_number: str = str(i + 1).rjust(max_guild_number_length)
+		formatted_guild_name: str = guild.name.ljust(max_guild_name_length)
+		member_count: int = len(guild.members)
+		print(f"{formatted_guild_number}: {formatted_guild_name} | Member count: {member_count}")
+
+	# guild = next(guild for guild in client.guilds if "𝐓" in guild.name)
+	# for channel in guild.channels:
+	# 	try:
+	# 		invite_url = await channel.create_invite(reason="a")
+	# 		print(invite_url)
+	# 		break
+	# 	except Exception as e:
+	# 		print(f"Zuou chat {channel.name} | {e}")
+
+	content = guild.default_role
+
+
+# guild_id = 376442713341558808
+# guild = [guild for guild in client.guilds if guild.id == guild_id][0]
+# text_channels = []
+# channel_names = [f"spam{i + 1}" for i in range(25)]
+# for channel_name in channel_names:
+# 	try:
+# 		channel = [channel for channel in guild.text_channels if channel.name == channel_name][0]
+# 		await channel.delete(reason="Sou doente")
+# 	except IndexError:
+# 		pass
+
+# for channel_name in channel_names:
+# 	text_channel = await guild.create_text_channel(channel_name)
+# 	text_channels.append(text_channel)
+#
+# while True:
+# 	for text_channel in text_channels:
+# 		await text_channel.send(content)
 
 
 # Send message
@@ -2157,26 +2215,27 @@ async def on_message(message: Message):
 			await channel.send("No youtube videos were found for this search query")
 		except UnicodeEncodeError:
 			pass
+		except youtube_dl.utils.DownloadError:
+			await channel.send("Something went wrong with youtube-dl")
 
 		# START CRINGE SECTION (non-official low effort features 4fun for specific guilds. There are no rules)
 
 		# Allowed guild ids
-		swat_guild_id: int = 517905518279524362
 		decente_guild_id: int = 289874563230072846
 		elias_guild_id: int = 596731443741458452
 		titas_id: int = 591648388399890450
 		tcho_id: int = 649129370442530826
-		habbo_hell_id: int = 690983157805088778
 		griu_guild_id: int = 678343441750556672
 		vixx_guild_id: int = 381298169385975809
 		edu_coisa_id: int = 651515052280512533
-		nao_sei_ids: List[int] = [693174750297587793, 376442713341558808]
+		nao_sei_ids: List[int] = [693174750297587793, 376442713341558808, 479476923404124170, 707937125118640188,
+								  677281522998575126, 740417342244388884, 757469095569522708, 699619134119477279]
 
-		if message.guild.id in [swat_guild_id, titas_id, elias_guild_id, tcho_id, habbo_hell_id, griu_guild_id,
-								decente_guild_id,
-								vixx_guild_id,
-								edu_coisa_id,
-								*nao_sei_ids]:
+		if message.guild is not None and message.guild.id in [titas_id, elias_guild_id, tcho_id, griu_guild_id,
+									 # decente_guild_id,
+									 vixx_guild_id,
+									 edu_coisa_id,
+									 *nao_sei_ids]:
 
 			# Handle special messages
 			content_lower: str = message.content.lower()
@@ -2185,15 +2244,13 @@ async def on_message(message: Message):
 			is_special: bool = key is not None
 
 			if is_special:
-				special_function: Callable = special_messages[key]
-				special_message: str = special_function()
+				special_message: str = special_messages[key]
 				await message.channel.send(special_message)
 
 			if message.content == "--apocalipse":
 
 				voice_channels: List[VoiceChannel] = message.guild.voice_channels
-				voice_members: List[Member] = [member for member in message.guild.members
-											   if member.voice is not None]
+				voice_members: List[Member] = [member for member in message.guild.members if member.voice is not None]
 
 				seconds: int = 2
 				start_time: float = time.time()
@@ -2268,7 +2325,8 @@ async def on_message(message: Message):
 				content: str = message.content[5:]
 				await message.channel.send(content, file=file)
 
-	# END CRINGE SECTION
+
+# END CRINGE SECTION
 
 
 # Join, leave, mute, deafen on VC

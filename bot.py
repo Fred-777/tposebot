@@ -13,13 +13,14 @@ import bs4
 import datetime
 import dotenv
 import json
-import librosa
 import logging
+from mutagen.mp3 import MP3
 import os
 import random
 import re
 import sys
 import time
+import traceback
 import youtube_dl
 
 # ---------- Environment variables ---------- #
@@ -86,7 +87,7 @@ for filename in os.listdir(f"./{youtube_videos_download_dir}"):
 	os.remove(f"./{youtube_videos_download_dir}/{filename}")
 
 # Prevent cache from ruining play command
-os.system("youtube-dl --rm-cache-dir")
+# os.system("youtube-dl --rm-cache-dir")
 
 with open(extra_srcs_path) as file:
 	data: str = file.read()
@@ -108,8 +109,8 @@ intents: Intents = Intents.all()
 client: Client = Client(activity=game, intents=intents)
 
 # Referenced before connection
-author_user: User = None
-connect_datetime: datetime.datetime = None
+author_user: Optional[User] = None
+connect_datetime: Optional[datetime.datetime] = None
 awake_timeouts: Dict[int, Set[int]] = {}
 
 
@@ -663,6 +664,10 @@ class NoVideoFoundException(Exception):
 	pass
 
 
+class RunException(Exception):
+	""" Exception triggered when run command is attempted by a member who isn't bot owner. """
+	pass
+
 # ---------- Internal functions ---------- #
 
 def pluralize(length: int, singular: str, plural: str) -> str:
@@ -886,13 +891,18 @@ async def process_message(message: Message) -> str:
 	# Handle input
 	arguments: List[str] = re.findall("\S+", message.content)
 	command: str = arguments[0]
-	is_help: bool = re.search(f"^{prefix}help", message.content) is not None
+	is_help: bool = message.content.startswith(f"{prefix}help")
 	command_exists: bool = command in commands_map
 	is_private: bool = message.guild is None
 
 	# Deal with private message
 	if is_private:
-		pass
+		print(f"DM - {message.author}: {message.content}")
+
+		# Allow private run
+		if message.content.startswith(f"{prefix}run"):
+			await run(message, arguments)
+
 	# Reply highlight
 	elif bot_was_highlighted:
 		reply = suggest_help()
@@ -1120,7 +1130,7 @@ async def add_youtube_video(url: str, message: Message) -> Video:
 
 	video_title: str = video_info["title"]
 	video_duration: int = int(video_info["duration"])
-	max_seconds_amount: int = 7200
+	max_seconds_amount: int = 14400
 
 	if video_duration > max_seconds_amount:
 		raise VideoTooLargeException(video_title)
@@ -1325,9 +1335,10 @@ async def cursed(message: Message, arguments: List[str]) -> str:
 
 	filenames: List[str] = os.listdir(f"./{cursed_audios_dir}")
 	filename: str = random.choice(filenames)
-	file_path = f"./{cursed_audios_dir}/{filename}"
+	file_path: str = f"./{cursed_audios_dir}/{filename}"
 
-	duration: int = int(librosa.get_duration(filename=file_path))
+	mp3: MP3 = MP3(file_path)
+	duration: int = int(mp3.info.length)
 
 	video: Video = Video(filename, duration, message, file_path)
 	result: str = await update_queue_and_feedback(message.guild, video)
@@ -1351,8 +1362,8 @@ async def play(message: Message, arguments: List[str]) -> None:
 	# Search for something if query was given
 	if query is not None:
 
-		is_query: str = query.find(youtube_base_url) == -1
-		youtube_video_url: str = None
+		is_query: bool = query.find(youtube_base_url) == -1
+		youtube_video_url: str
 		if is_query:
 			try:
 				youtube_video_url = await request_video_url(query)
@@ -1948,6 +1959,36 @@ async def invite(message: Message, arguments: List[str]) -> str:
 	invite_url: str = "https://discord.com/oauth2/authorize?client_id=647954736959717416&permissions=1408363632&scope=bot"
 	return invite_url
 
+async def run(message: Message, arguments: List[str]) -> None:
+	""" Run text received from message content as code interactively. """
+	offset: int = len(prefix) + 4
+	code: str = message.content[offset:].strip()
+	code = code[3: -3].strip()
+	
+	if message.author.id != author_id:
+		raise RunException("Permission denied!")
+
+	output: str = ""
+	try:
+		output = await async_exec(message, code)
+		if len(output) > 0:
+			await message.channel.send(format_code_block(output))
+	except HTTPException as e:
+		filename: str = "run-content.txt"
+		with open(filename, "w") as file:
+			file.write(str(e) + "\n")
+			file.write(output)
+
+		output_file: File = File(filename)
+		await message.channel.send(file=output_file)
+	except Exception as e:
+		dm_channel: DMChannel = await author_user.create_dm()
+		content: str = "".join(traceback.format_tb(e.__traceback__))
+		content += f"\n{str(e)}"
+		await dm_channel.send(format_code_block(content))
+	finally:
+		outputs.clear()
+
 
 # ---------- Application variables ---------- #
 
@@ -2092,7 +2133,8 @@ commands_map: Dict[str, Callable] = {
 	f"{prefix}awake": awake,
 	f"{prefix}loop": loop,
 	f"{prefix}search": search,
-	f"{prefix}invite": invite
+	f"{prefix}invite": invite,
+	f"{prefix}run": run
 }
 
 voice_restrictions: Set[str] = {"deaf", "mute"}
@@ -2179,6 +2221,23 @@ async def on_ready():
 # 	for text_channel in text_channels:
 # 		await text_channel.send(content)
 
+outputs: List[str] = []
+def p(*args: Any) -> None:
+	global outputs
+	args_str: List[str] = [str(arg) for arg in args]
+	s: str = " ".join(args_str)
+	outputs.append(s)
+
+async def async_exec(message: Message, code: str):
+
+	exec(
+		"async def async_exec_wrapper(message):\n" +
+		"".join(f"\n  {line}" for line in code.split("\n"))
+	)
+
+	await locals()["async_exec_wrapper"](message)
+	output: str = "\n".join(outputs)
+	return output
 
 # Send message
 @client.event
@@ -2187,9 +2246,9 @@ async def on_message(message: Message):
 	has_content: bool = message.content != ""
 
 	if not sent_by_bot and has_content:
+		channel: TextChannel = message.channel
+		
 		try:
-			channel: TextChannel = message.channel
-
 			reply: str = await process_message(message)
 			if reply is not None:
 				await channel.send(reply)
@@ -2217,6 +2276,8 @@ async def on_message(message: Message):
 			pass
 		except youtube_dl.utils.DownloadError:
 			await channel.send("Something went wrong with youtube-dl")
+		except RunException as e:
+			await channel.send(e)
 
 		# START CRINGE SECTION (non-official low effort features 4fun for specific guilds. There are no rules)
 
@@ -2229,7 +2290,8 @@ async def on_message(message: Message):
 		vixx_guild_id: int = 381298169385975809
 		edu_coisa_id: int = 651515052280512533
 		nao_sei_ids: List[int] = [693174750297587793, 376442713341558808, 479476923404124170, 707937125118640188,
-								  677281522998575126, 740417342244388884, 757469095569522708, 699619134119477279]
+								  677281522998575126, 740417342244388884, 757469095569522708, 699619134119477279,
+								  201913911576887300]
 
 		if message.guild is not None and message.guild.id in [titas_id, elias_guild_id, tcho_id, griu_guild_id,
 									 # decente_guild_id,
@@ -2257,10 +2319,13 @@ async def on_message(message: Message):
 
 				while True:
 					for voice_member in voice_members:
-						other_voice_channels: List[VoiceChannel] = [channel for channel in voice_channels
-																	if channel != voice_member.voice.channel]
-						voice_channel: VoiceChannel = random.choice(other_voice_channels)
-						await voice_member.move_to(voice_channel)
+						try:
+							other_voice_channels: List[VoiceChannel] = [channel for channel in voice_channels
+																		if channel != voice_member.voice.channel]
+							voice_channel: VoiceChannel = random.choice(other_voice_channels)
+							await voice_member.move_to(voice_channel)
+						except errors.HTTPException:
+							pass
 
 					if time.time() - start_time >= seconds:
 						break
@@ -2390,7 +2455,8 @@ async def on_member_update(before: Member, after: Member):
 
 # Member join guild
 @client.event
-async def on_guild_join(guild: Guild):
+async def on_guild_join(member: Member):
+	guild: Guild = member.guild
 	print(f"Added to guild {guild.name}")
 	was_bot_added: bool = not MuteEvent.check_guild(guild.id)
 

@@ -16,6 +16,7 @@ import json
 import logging
 from mutagen.mp3 import MP3
 import os
+from PIL import Image, ImageGrab
 import random
 import re
 import sys
@@ -30,10 +31,19 @@ env_path: str = "./.env"
 os.chdir(base_path)
 dotenv.load_dotenv(env_path)
 
+# Discord API
+token: str = os.getenv("token")
+
+# Youtube API
 api_key: str = os.getenv("api_key")
 prefix: str = os.getenv("prefix")
-token: str = os.getenv("token")
+
+# Dogpile parameter
 sc_param: str = os.getenv("sc_param")
+
+# Spotify API
+client_id: str = os.getenv("client_id")
+client_secret: str = os.getenv("client_secret")
 
 extra_srcs_path: str = "./extra-srcs.txt"
 
@@ -43,6 +53,8 @@ youtube_videos_download_dir: str = "youtube-videos-download"
 youtube_base_url: str = "https://www.youtube.com"
 
 n_words_path: str = "./n-words.txt"
+
+bal: int = 0
 
 # ---------- Debugging ---------- #
 
@@ -991,8 +1003,12 @@ async def request_voice_client(message: Message) -> VoiceClient:
 
 async def disconnect(guild: Guild) -> None:
 	""" Disconnect voice client from guild. """
-	await guild.voice_client.disconnect()
+	if guild.voice_client is not None:
+		await guild.voice_client.disconnect()
+
 	Video.clear_queue(guild.id)
+	Video.connected_voice_channels[guild.id] = None
+	Video.caller_text_channels[guild.id] = None
 
 
 async def update_queue(guild: Guild, video: Video, is_skip: bool = False) -> None:
@@ -1398,7 +1414,7 @@ async def play(message: Message, arguments: List[str]) -> None:
 					result: str = await update_queue_and_feedback(message.guild, video)
 					await message.channel.send(result, delete_after=30)
 				except youtube_dl.utils.DownloadError:
-					await message.channel.send(f"Couldn't download video {video_id}")
+					await message.channel.send(f"Couldn't download video {video_id}", delete_after=60)
 		elif has_video:
 			try:
 				# Play youtube video
@@ -1990,6 +2006,19 @@ async def run(message: Message, arguments: List[str]) -> None:
 		outputs.clear()
 
 
+async def screenshot(message: Message, arguments: List[str]) -> None:
+	""" Screenshot and send image file to called text channel. """
+	if message.author.id != author_id:
+		raise RunException("Permission denied!")
+
+	cache_filename: str = "cache_img.png"
+	img: Image.Image = ImageGrab.grab()
+	img.save(cache_filename)
+	file: File = File(cache_filename)
+	await message.channel.send(file=file)
+	img.close()
+
+
 # ---------- Application variables ---------- #
 
 # Async scheduler
@@ -2134,22 +2163,23 @@ commands_map: Dict[str, Callable] = {
 	f"{prefix}loop": loop,
 	f"{prefix}search": search,
 	f"{prefix}invite": invite,
-	f"{prefix}run": run
+	f"{prefix}run": run,
+	f"{prefix}print": screenshot
 }
 
 voice_restrictions: Set[str] = {"deaf", "mute"}
 
 # Specific messages to be replied
 special_messages: Dict[str, str] = {
-	"ok": "boomer",
-	"oi": "oi",
-	"que": "ijo",
-	"q": "ijo",
-	"perdi": "perdi",
-	"zabloing": "floppa",
-	"googas": "floppa",
-	"caracal": "floppa",
-	"floppa": "floppa",
+	# "ok": "boomer",
+	# "oi": "oi",
+	# "que": "ijo",
+	# "q": "ijo",
+	# "perdi": "perdi",
+	# "zabloing": "floppa",
+	# "googas": "floppa",
+	# "caracal": "floppa",
+	# "floppa": "floppa",
 }
 
 
@@ -2190,6 +2220,22 @@ async def on_ready():
 		member_count: int = len(guild.members)
 		print(f"{formatted_guild_number}: {formatted_guild_name} | Member count: {member_count}")
 
+	# Send daily kanye east
+	kanye_url: str = "https://cdn.discordapp.com/attachments/811039604371226635/811739280488792134/Kanye_East.png"
+	kanye_channel_id: int = 811039604371226635
+	try:
+		kanye_channel: TextChannel = await client.fetch_channel(kanye_channel_id)
+		last_message: Message = await kanye_channel.history(limit=1).__anext__()
+
+		now: datetime.datetime = datetime.datetime.now()
+		last_datetime: datetime.datetime = last_message.created_at
+		was_sent_today: bool = (now.year, now.month, now.day) == \
+							   (last_datetime.year, last_datetime.month, last_datetime.day)
+		if not was_sent_today:
+			await kanye_channel.send(kanye_url)
+	except Exception as e:
+		print("Couldn't send daily kanye east")
+
 	# guild = next(guild for guild in client.guilds if "𝐓" in guild.name)
 	# for channel in guild.channels:
 	# 	try:
@@ -2199,7 +2245,7 @@ async def on_ready():
 	# 	except Exception as e:
 	# 		print(f"Zuou chat {channel.name} | {e}")
 
-	content = guild.default_role
+	# content = guild.default_role
 
 
 # guild_id = 376442713341558808
@@ -2279,7 +2325,7 @@ async def on_message(message: Message):
 		except RunException as e:
 			await channel.send(e)
 
-		# START CRINGE SECTION (non-official low effort features 4fun for specific guilds. There are no rules)
+		# START NORULE SECTION (non-official low effort features 4fun for specific guilds. There are no rules)
 
 		# Allowed guild ids
 		decente_guild_id: int = 289874563230072846
@@ -2291,10 +2337,10 @@ async def on_message(message: Message):
 		edu_coisa_id: int = 651515052280512533
 		nao_sei_ids: List[int] = [693174750297587793, 376442713341558808, 479476923404124170, 707937125118640188,
 								  677281522998575126, 740417342244388884, 757469095569522708, 699619134119477279,
-								  201913911576887300]
+								  201913911576887300, 812322517498200064]
 
 		if message.guild is not None and message.guild.id in [titas_id, elias_guild_id, tcho_id, griu_guild_id,
-									 # decente_guild_id,
+									 decente_guild_id,
 									 vixx_guild_id,
 									 edu_coisa_id,
 									 *nao_sei_ids]:
@@ -2390,8 +2436,19 @@ async def on_message(message: Message):
 				content: str = message.content[5:]
 				await message.channel.send(content, file=file)
 
+			if message.content.startswith("--pass"):
+				if True:
+					pass
+	else:
+		# FARM .FISH
+		if message.channel.id == 839684911563538452 and message.author.id == 563434444321587202:
+			value_str: str = re.search("[+-]\d+", message.content)[0]
+			value: int = int(value_str)
+			global bal
+			bal = max(bal + value, 0)
 
-# END CRINGE SECTION
+
+# END NORULE SECTION
 
 
 # Join, leave, mute, deafen on VC
@@ -2424,8 +2481,7 @@ async def on_voice_state_update(member: Member, before: VoiceState, after: Voice
 	if has_left:
 		if is_member_bot:
 			if not has_joined:
-				Video.clear_queue(guild.id)
-				Video.connected_voice_channels[guild.id] = None
+				await disconnect(guild)
 		else:
 			is_bot_in_channel: bool = bot_id in [member.id for member in before.channel.members]
 			if is_bot_in_channel:
@@ -2455,13 +2511,13 @@ async def on_member_update(before: Member, after: Member):
 
 # Member join guild
 @client.event
-async def on_guild_join(member: Member):
+async def on_member_join(member: Member):
 	guild: Guild = member.guild
-	print(f"Added to guild {guild.name}")
-	was_bot_added: bool = not MuteEvent.check_guild(guild.id)
+	was_bot_added: bool = member.id == bot_id
 
 	# Add guild dict
 	if was_bot_added:
+		print(f"Added to guild {guild.name}")
 		for restrict_event_class in RestrictEvent.__subclasses__():
 			restrict_event_class.add_guild(guild.id)
 
@@ -2480,9 +2536,9 @@ async def on_member_remove(member: Member):
 
 	# Remove guild dict
 	if was_bot_removed:
-		print(f"Removed from guild {member.guild.name}")
-
 		guild: Guild = member.guild
+
+		print(f"Removed from guild {guild.name}")
 
 		for restrict_event_class in RestrictEvent.__subclasses__():
 			restrict_event_class.remove_guild(guild.id)
